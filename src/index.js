@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const http = require("http");
+
 const {
   Client,
   GatewayIntentBits,
@@ -29,6 +31,23 @@ if (!guildId) {
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
+});
+
+const port = Number(process.env.PORT || 3000);
+
+const server = http.createServer((request, response) => {
+  if (request.url === "/" || request.url === "/health") {
+    response.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("ok");
+    return;
+  }
+
+  response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+  response.end("not found");
+});
+
+server.listen(port, () => {
+  console.log(`HTTP health server listening on port ${port}`);
 });
 
 const commands = [
