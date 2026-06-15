@@ -133,14 +133,19 @@ client.on("interactionCreate", async (interaction) => {
       const sticker = stickers.find(s => s.name === dailyStickerName);
 
       if (!sticker) {
-        await interaction.reply({ content: `서버에서 \`${dailyStickerName}\` 스티커를 찾을 수 없습니다.`, ephemeral: true });
+        await interaction.reply({ content: `서버에서 \`${dailyStickerName}\` 스티커를 찾을 수 없습니다.`, flags: 64 });
         return;
       }
 
-      await interaction.reply({ stickers: [sticker.id] });
+      await interaction.reply({ content: "스티커 전송 완료", flags: 64 });
+      await interaction.channel.send({ stickers: [sticker.id] });
     } catch (error) {
       console.error("2시 명령어 실행 중 오류:", error);
-      await interaction.reply({ content: "스티커를 가져오는 중 오류가 발생했습니다.", ephemeral: true });
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: "오류가 발생했습니다.", flags: 64 });
+      } else {
+        await interaction.reply({ content: "스티커를 가져오는 중 오류가 발생했습니다.", flags: 64 });
+      }
     }
   }
 });
