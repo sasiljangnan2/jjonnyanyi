@@ -16,6 +16,7 @@ const clientId = (process.env.DISCORD_CLIENT_ID || "").trim();
 const guildId = (process.env.DISCORD_GUILD_ID || "").trim();
 const dailyStickerName = (process.env.DAILY_STICKER_NAME || "Emaclock").trim();
 const dailyChannelId = (process.env.DAILY_CHANNEL_ID || "").trim();
+const dailyCronTimezone = (process.env.DAILY_TIMEZONE || "Asia/Seoul").trim();
 
 if (!token) {
   console.error("DISCORD_TOKEN is missing. Add it to your .env file.");
@@ -62,14 +63,35 @@ const commands = [
     .setName("2시")
     .setDescription("2시라니..... 그렇게 밤늦게 일어나 있다니 이상해!")
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("2시테스트")
+    .setDescription("지금 지정한 스티커를 즉시 테스트 전송합니다")
+    .toJSON(),
 ];
+
+async function sendStickerByNameToChannel(guild, channelId, stickerName) {
+  const channel = await guild.channels.fetch(channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) {
+    throw new Error(`Channel ${channelId} not found or is not a text channel.`);
+  }
+
+  const stickers = await guild.stickers.fetch();
+  const sticker = stickers.find((s) => s.name === stickerName);
+
+  if (!sticker) {
+    throw new Error(`Sticker ${stickerName} not found in guild.`);
+  }
+
+  await channel.send({ stickers: [sticker.id] });
+  return sticker;
+}
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(token);
   await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     body: commands,
   });
-  console.log(`Registered commands for guild ${guildId}: /안녕`);
+  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트`);
 }
 
 client.once("ready", async () => {
@@ -97,27 +119,13 @@ client.once("ready", async () => {
         return;
       }
 
-      const channel = await guild.channels.fetch(dailyChannelId).catch(() => null);
-      if (!channel || !channel.isTextBased()) {
-        console.error(`Channel ${dailyChannelId} not found or is not a text channel.`);
-        return;
-      }
-
-      const stickers = await guild.stickers.fetch();
-      const sticker = stickers.find(s => s.name === dailyStickerName);
-
-      if (!sticker) {
-        console.error(`Sticker ${dailyStickerName} not found in guild.`);
-        return;
-      }
-
-      await channel.send({ stickers: [sticker.id] });
+      await sendStickerByNameToChannel(guild, dailyChannelId, dailyStickerName);
       console.log(`Successfully sent sticker ${dailyStickerName} to channel ${dailyChannelId}`);
     } catch (error) {
       console.error("Error in daily sticker job:", error);
     }
-  });
-  console.log("Daily 2:00 AM sticker job scheduled.");
+  }, { timezone: dailyCronTimezone });
+  console.log(`Daily 2:00 AM sticker job scheduled. timezone=${dailyCronTimezone}`);
 });
 
 client.on("interactionCreate", async (interaction) => {
@@ -129,22 +137,41 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "2시") {
     try {
-      const stickers = await interaction.guild.stickers.fetch();
-      const sticker = stickers.find(s => s.name === dailyStickerName);
-
-      if (!sticker) {
-        await interaction.reply({ content: `서버에서 \`${dailyStickerName}\` 스티커를 찾을 수 없습니다.`, flags: 64 });
+      const guild = interaction.guild;
+      if (!guild) {
+        await interaction.reply({ content: "서버에서만 사용할 수 있습니다.", flags: 64 });
         return;
       }
 
-      await interaction.reply({ content: "스티커 전송 완료", flags: 64 });
-      await interaction.channel.send({ stickers: [sticker.id] });
+      await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
+      await interaction.reply({ content: `스티커 전송 완료: ${dailyStickerName}`, flags: 64 });
     } catch (error) {
       console.error("2시 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
         await interaction.followUp({ content: "오류가 발생했습니다.", flags: 64 });
       } else {
         await interaction.reply({ content: "스티커를 가져오는 중 오류가 발생했습니다.", flags: 64 });
+      }
+    }
+    return;
+  }
+
+  if (interaction.commandName === "2시테스트") {
+    try {
+      const guild = interaction.guild;
+      if (!guild) {
+        await interaction.reply({ content: "서버에서만 사용할 수 있습니다.", flags: 64 });
+        return;
+      }
+
+      await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
+      await interaction.reply({ content: `테스트 전송 완료: ${dailyStickerName}`, flags: 64 });
+    } catch (error) {
+      console.error("2시테스트 명령어 실행 중 오류:", error);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: "테스트 전송 실패", flags: 64 });
+      } else {
+        await interaction.reply({ content: "테스트 전송 실패", flags: 64 });
       }
     }
   }
