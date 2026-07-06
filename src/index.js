@@ -253,6 +253,15 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "룰렛") {
     const result = await runRoulette(interaction);
+
+    if (result.success) {
+      if (interaction.channel?.isTextBased()) {
+        await interaction.channel.send({ content: `${interaction.user} | ${result.message}` });
+      }
+      await interaction.reply({ content: result.message, flags: 64 });
+      return;
+    }
+
     await interaction.reply({ content: result.message, flags: 64 });
     return;
   }
