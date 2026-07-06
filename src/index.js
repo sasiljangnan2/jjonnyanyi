@@ -253,16 +253,28 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "룰렛") {
     const result = await runRoulette(interaction);
+    const publicMessage = `${interaction.user} | ${result.message}`;
 
     if (result.success) {
-      if (interaction.channel?.isTextBased()) {
-        await interaction.channel.send({ content: `${interaction.user} | ${result.message}` });
-      }
       await interaction.reply({ content: result.message, flags: 64 });
+
+      if (interaction.channel?.isTextBased()) {
+        interaction.channel.send({ content: publicMessage }).catch((error) => {
+          console.error("Failed to post roulette success message to channel:", error);
+        });
+      }
+
       return;
     }
 
     await interaction.reply({ content: result.message, flags: 64 });
+
+    if (interaction.channel?.isTextBased()) {
+      interaction.channel.send({ content: publicMessage }).catch((error) => {
+        console.error("Failed to post roulette failure message to channel:", error);
+      });
+    }
+
     return;
   }
 });
