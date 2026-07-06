@@ -23,6 +23,8 @@ const randomRoleId = (process.env.RANDOM_ROLE_ID || "").trim();
 const randomRoleChancePercent = Number(process.env.RANDOM_ROLE_CHANCE_PERCENT || 10);
 const rouletteUsagePath = path.join(__dirname, "..", "roulette_usage.json");
 const rouletteDailyLimit = 3;
+const rouletteRemovalTimers = new Map();
+const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
 
 if (!token) {
   console.error("DISCORD_TOKEN is missing. Add it to your .env file.");
@@ -63,27 +65,27 @@ server.listen(port, () => {
 const commands = [
   new SlashCommandBuilder()
     .setName("안녕")
-    .setDescription("존냥아")
+    .setDescription("이치히메 인사 받아라냥")
     .toJSON(),
   new SlashCommandBuilder()
     .setName("2시")
-    .setDescription("2시라니..... 그렇게 밤늦게 일어나 있다니 이상해!")
+    .setDescription("2시 스티커 발사다냥")
     .toJSON(),
   new SlashCommandBuilder()
     .setName("2시테스트")
-    .setDescription("지금 지정한 스티커를 즉시 테스트 전송합니다")
+    .setDescription("스티커 바로 테스트한다냥")
     .toJSON(),
   new SlashCommandBuilder()
     .setName("룰렛")
-    .setDescription("일정 확률로 역할을 얻는 룰렛을 돌립니다")
+    .setDescription("운 시험하는 룰렛이다냥")
     .toJSON(),
   new SlashCommandBuilder()
     .setName("룰렛초기화")
-    .setDescription("특정 사용자의 오늘 룰렛 횟수를 초기화합니다 (관리자 전용)")
+    .setDescription("오늘 룰렛 횟수 초기화한다냥 (관리자 전용)")
     .addUserOption((option) =>
       option
         .setName("대상")
-        .setDescription("초기화할 사용자")
+        .setDescription("초기화할 대상을 골라라냥")
         .setRequired(true)
     )
     .toJSON(),
@@ -227,22 +229,68 @@ async function maybeAwardRandomRole(interaction) {
   }
 }
 
+function scheduleRouletteRoleRemoval(guildId, userId, roleId, delayMs = rouletteRoleRemovalDelayMs) {
+  const timerKey = `${guildId}:${userId}:${roleId}`;
+  const existingTimer = rouletteRemovalTimers.get(timerKey);
+
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  const timer = setTimeout(async () => {
+    rouletteRemovalTimers.delete(timerKey);
+
+    try {
+      const guild = await client.guilds.fetch(guildId).catch(() => null);
+      if (!guild) {
+        console.error(`Guild ${guildId} not found for roulette role removal.`);
+        return;
+      }
+
+      const member = await guild.members.fetch(userId).catch(() => null);
+      if (!member) {
+        console.error(`Member ${userId} not found for roulette role removal.`);
+        return;
+      }
+
+      const role = await guild.roles.fetch(roleId);
+      if (!role) {
+        console.error(`Role ${roleId} not found for roulette role removal.`);
+        return;
+      }
+
+      if (member.roles.cache.has(role.id)) {
+        await member.roles.remove(role.id);
+        console.log(`Roulette role removed after delay: ${role.name} -> ${member.user.tag}`);
+      }
+    } catch (error) {
+      console.error("Failed to remove roulette role after delay:", error);
+    }
+  }, delayMs);
+
+  rouletteRemovalTimers.set(timerKey, timer);
+}
+
 async function runRoulette(interaction) {
   if (!interaction.guild) {
-    return { success: false, message: "서버에서만 사용할 수 있습니다." };
+    return { success: false, message: "여긴 서버에서만 되는 거다냥!" };
   }
 
   if (!randomRoleId) {
-    return { success: false, message: "RANDOM_ROLE_ID가 설정되지 않았습니다." };
+    return { success: false, message: "RANDOM_ROLE_ID 설정이 비어 있다냥." };
   }
 
   if (!Number.isFinite(randomRoleChancePercent) || randomRoleChancePercent <= 0) {
-    return { success: false, message: "RANDOM_ROLE_CHANCE_PERCENT가 올바르지 않습니다." };
+    return { success: false, message: "확률 값이 이상하다냥. 설정 다시 봐라냥." };
   }
+
+    if (!Number.isFinite(rouletteRoleRemovalDelayMs) || rouletteRoleRemovalDelayMs < 0) {
+      return { success: false, message: "역할 제거 시간 값이 이상하다냥." };
+    }
 
   const roll = Math.random() * 100;
   if (roll >= randomRoleChancePercent) {
-    return { success: false, message: `❌ **실패!** (확률 ${randomRoleChancePercent}%)` };
+    return { success: false, message: `❌ **꽝이다냥!** (확률 ${randomRoleChancePercent}%)` };
   }
 
   try {
@@ -251,19 +299,19 @@ async function runRoulette(interaction) {
     const botMember = interaction.guild.members.me;
 
     if (!role) {
-      return { success: false, message: "❌ **실패!** 지정한 역할을 찾을 수 없습니다." };
+      return { success: false, message: "❌ **꽝이다냥!** 지정한 역할이 안 보인다냥." };
     }
 
     if (!botMember) {
-      return { success: true, message: "🎉 **성공!** 하지만 봇 멤버를 확인할 수 없어 역할은 지급하지 못했습니다." };
+      return { success: true, message: "🎀 **당첨이다냥!** 근데 봇 멤버 확인이 안 돼서 역할은 못 줬다냥." };
     }
 
     if (!botMember.permissions.has("ManageRoles")) {
-      return { success: true, message: "🎉 **성공!** 하지만 봇에 역할 관리 권한이 없어 역할은 지급하지 못했습니다." };
+      return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 관리 권한이 없어서 못 줬다냥." };
     }
 
     if (!role.editable) {
-      return { success: true, message: `🎉 **성공!** 하지만 봇 역할이 \`${role.name}\`보다 아래에 있어 역할은 지급하지 못했습니다.` };
+      return { success: true, message: `🎀 **당첨이다냥!** 근데 봇 역할이 \`${role.name}\`보다 아래라서 못 줬다냥.` };
     }
 
     if (!member.roles.cache.has(role.id)) {
@@ -271,14 +319,20 @@ async function runRoulette(interaction) {
         await member.roles.add(role.id);
       } catch (roleError) {
         console.error("Failed to add roulette role:", roleError);
-        return { success: true, message: `🎉 **성공!** ${role.name} 역할 지급은 실패했지만 당첨은 인정되었습니다.` };
+        return { success: true, message: `🎀 **당첨이다냥!** ${role.name} 지급은 실패했지만 당첨은 인정이다냥.` };
       }
+
+      return {
+        success: true,
+        message: `🎀 **당첨이다냥!** ${role.name} 역할 획득했다냥! (확률 ${randomRoleChancePercent}%)`,
+        grantedRoleId: role.id,
+      };
     }
 
-    return { success: true, message: `🎉 **성공!** ${role.name} 역할을 획득했습니다. (확률 ${randomRoleChancePercent}%)` };
+    return { success: true, message: `🎀 **당첨이다냥!** 이미 ${role.name} 역할 가지고 있다냥. (확률 ${randomRoleChancePercent}%)` };
   } catch (error) {
     console.error("Failed to run roulette:", error);
-    return { success: true, message: "🎉 **성공!** 다만 역할 지급 중 문제가 발생했습니다." };
+    return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 지급 중에 문제 터졌다냥." };
   }
 }
 
@@ -328,7 +382,7 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === "안녕") {
-    await interaction.reply("<:ema:1463844904307261450>");
+    await interaction.reply("<:ema:1463844904307261450> 냥! 이치히메 등장이다냥~");
     await maybeAwardRandomRole(interaction);
   }
 
@@ -336,19 +390,19 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const guild = interaction.guild;
       if (!guild) {
-        await interaction.reply({ content: "서버에서만 사용할 수 있습니다.", flags: 64 });
+        await interaction.reply({ content: "서버에서만 쓸 수 있다냥.", flags: 64 });
         return;
       }
 
       await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
-      await interaction.reply({ content: `스티커 전송 완료: ${dailyStickerName}`, flags: 64 });
+      await interaction.reply({ content: `스티커 발사 완료다냥: ${dailyStickerName}`, flags: 64 });
       await maybeAwardRandomRole(interaction);
     } catch (error) {
       console.error("2시 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: "오류가 발생했습니다.", flags: 64 });
+        await interaction.followUp({ content: "문제가 생겼다냥.", flags: 64 });
       } else {
-        await interaction.reply({ content: "스티커를 가져오는 중 오류가 발생했습니다.", flags: 64 });
+        await interaction.reply({ content: "스티커 가져오다가 문제 생겼다냥.", flags: 64 });
       }
     }
     return;
@@ -358,19 +412,19 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const guild = interaction.guild;
       if (!guild) {
-        await interaction.reply({ content: "서버에서만 사용할 수 있습니다.", flags: 64 });
+        await interaction.reply({ content: "서버에서만 쓸 수 있다냥.", flags: 64 });
         return;
       }
 
       await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
-      await interaction.reply({ content: `테스트 전송 완료: ${dailyStickerName}`, flags: 64 });
+      await interaction.reply({ content: `테스트 발사 끝났다냥: ${dailyStickerName}`, flags: 64 });
       await maybeAwardRandomRole(interaction);
     } catch (error) {
       console.error("2시테스트 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: "테스트 전송 실패", flags: 64 });
+        await interaction.followUp({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
       } else {
-        await interaction.reply({ content: "테스트 전송 실패", flags: 64 });
+        await interaction.reply({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
       }
     }
     return;
@@ -380,15 +434,13 @@ client.on("interactionCreate", async (interaction) => {
     if (!isAdminInteraction(interaction)) {
       const quota = consumeRouletteQuota(interaction.user.id);
       if (!quota.allowed) {
-        await interaction.reply({ content: `❌ 오늘은 이미 ${rouletteDailyLimit}번 사용했습니다. 내일 다시 시도해주세요.`, flags: 64 });
+        await interaction.reply({ content: `❌ 오늘은 이미 ${rouletteDailyLimit}번 돌렸다냥. 내일 다시 와라냥.`, flags: 64 });
         return;
       }
     }
 
     const result = await runRoulette(interaction);
-    const publicMessage = result.success
-      ? `${interaction.user} | 🎉 **성공!** ${result.message.replace(/^🎉 \*\*성공!\*\*\s*/, "")}`
-      : `${interaction.user} | ❌ **실패!** ${result.message.replace(/^❌ \*\*실패!\*\*\s*/, "")}`;
+    const publicMessage = `${interaction.user} | ${result.message}`;
 
     if (result.success) {
       await interaction.reply({ content: result.message, flags: 64 });
@@ -397,6 +449,10 @@ client.on("interactionCreate", async (interaction) => {
         interaction.channel.send({ content: publicMessage }).catch((error) => {
           console.error("Failed to post roulette success message to channel:", error);
         });
+      }
+
+      if (result.grantedRoleId && rouletteRoleRemovalDelayMs > 0) {
+        scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId);
       }
 
       return;
@@ -415,18 +471,18 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "룰렛초기화") {
     if (!isAdminInteraction(interaction)) {
-      await interaction.reply({ content: "❌ 관리자만 사용할 수 있습니다.", flags: 64 });
+      await interaction.reply({ content: "❌ 관리자만 쓸 수 있다냥.", flags: 64 });
       return;
     }
 
     const targetUser = interaction.options.getUser("대상");
     if (!targetUser) {
-      await interaction.reply({ content: "❌ 초기화할 사용자를 찾을 수 없습니다.", flags: 64 });
+      await interaction.reply({ content: "❌ 초기화할 대상을 못 찾았다냥.", flags: 64 });
       return;
     }
 
     resetRouletteQuotaForUser(targetUser.id);
-    await interaction.reply({ content: `✅ ${targetUser.tag} 님의 오늘 룰렛 횟수를 초기화했습니다.`, flags: 64 });
+    await interaction.reply({ content: `✅ ${targetUser.tag} 오늘 룰렛 횟수 초기화 끝났다냥.`, flags: 64 });
     return;
   }
 });
