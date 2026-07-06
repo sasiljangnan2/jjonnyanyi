@@ -1,6 +1,8 @@
 require("dotenv").config();
 
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const cron = require("node-cron");
 
 const {
@@ -19,6 +21,8 @@ const dailyChannelId = (process.env.DAILY_CHANNEL_ID || "").trim();
 const dailyCronTimezone = (process.env.DAILY_TIMEZONE || "Asia/Seoul").trim();
 const randomRoleId = (process.env.RANDOM_ROLE_ID || "").trim();
 const randomRoleChancePercent = Number(process.env.RANDOM_ROLE_CHANCE_PERCENT || 10);
+const rouletteUsagePath = path.join(__dirname, "..", "roulette_usage.json");
+const rouletteDailyLimit = 3;
 
 if (!token) {
   console.error("DISCORD_TOKEN is missing. Add it to your .env file.");
@@ -73,6 +77,16 @@ const commands = [
     .setName("룰렛")
     .setDescription("일정 확률로 역할을 얻는 룰렛을 돌립니다")
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("룰렛초기화")
+    .setDescription("특정 사용자의 오늘 룰렛 횟수를 초기화합니다 (관리자 전용)")
+    .addUserOption((option) =>
+      option
+        .setName("대상")
+        .setDescription("초기화할 사용자")
+        .setRequired(true)
+    )
+    .toJSON(),
 ];
 
 async function sendStickerByNameToChannel(guild, channelId, stickerName) {
@@ -90,6 +104,83 @@ async function sendStickerByNameToChannel(guild, channelId, stickerName) {
 
   await channel.send({ stickers: [sticker.id] });
   return sticker;
+}
+
+function getSeoulDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function readRouletteUsage() {
+  try {
+    if (!fs.existsSync(rouletteUsagePath)) {
+      return { date: getSeoulDateKey(), users: {} };
+    }
+
+    const raw = fs.readFileSync(rouletteUsagePath, "utf8");
+    const parsed = JSON.parse(raw || "{}");
+    if (!parsed.date || typeof parsed.users !== "object" || !parsed.users) {
+      return { date: getSeoulDateKey(), users: {} };
+    }
+
+    if (parsed.date !== getSeoulDateKey()) {
+      return { date: getSeoulDateKey(), users: {} };
+    }
+
+    return parsed;
+  } catch (error) {
+    console.error("Failed to read roulette usage:", error);
+    return { date: getSeoulDateKey(), users: {} };
+  }
+}
+
+function writeRouletteUsage(data) {
+  try {
+    fs.writeFileSync(rouletteUsagePath, JSON.stringify(data, null, 2), "utf8");
+  } catch (error) {
+    console.error("Failed to write roulette usage:", error);
+  }
+}
+
+function consumeRouletteQuota(userId) {
+  const today = getSeoulDateKey();
+  const usage = readRouletteUsage();
+
+  if (usage.date !== today) {
+    usage.date = today;
+    usage.users = {};
+  }
+
+  const currentCount = Number(usage.users[userId] || 0);
+  if (currentCount >= rouletteDailyLimit) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  usage.users[userId] = currentCount + 1;
+  writeRouletteUsage(usage);
+
+  return { allowed: true, remaining: rouletteDailyLimit - usage.users[userId] };
+}
+
+function resetRouletteQuotaForUser(userId) {
+  const usage = readRouletteUsage();
+  const today = getSeoulDateKey();
+
+  if (usage.date !== today) {
+    usage.date = today;
+    usage.users = {};
+  }
+
+  delete usage.users[userId];
+  writeRouletteUsage(usage);
+}
+
+function isAdminInteraction(interaction) {
+  return Boolean(interaction.memberPermissions?.has("Administrator"));
 }
 
 async function maybeAwardRandomRole(interaction) {
@@ -151,7 +242,7 @@ async function runRoulette(interaction) {
 
   const roll = Math.random() * 100;
   if (roll >= randomRoleChancePercent) {
-    return { success: false, message: `실패! (확률 ${randomRoleChancePercent}%)` };
+    return { success: false, message: `❌ **실패!** (확률 ${randomRoleChancePercent}%)` };
   }
 
   try {
@@ -160,19 +251,19 @@ async function runRoulette(interaction) {
     const botMember = interaction.guild.members.me;
 
     if (!role) {
-      return { success: false, message: "지정한 역할을 찾을 수 없습니다." };
+      return { success: false, message: "❌ **실패!** 지정한 역할을 찾을 수 없습니다." };
     }
 
     if (!botMember) {
-      return { success: true, message: "성공! 하지만 봇 멤버를 확인할 수 없어 역할은 지급하지 못했습니다." };
+      return { success: true, message: "🎉 **성공!** 하지만 봇 멤버를 확인할 수 없어 역할은 지급하지 못했습니다." };
     }
 
     if (!botMember.permissions.has("ManageRoles")) {
-      return { success: true, message: "성공! 하지만 봇에 역할 관리 권한이 없어 역할은 지급하지 못했습니다." };
+      return { success: true, message: "🎉 **성공!** 하지만 봇에 역할 관리 권한이 없어 역할은 지급하지 못했습니다." };
     }
 
     if (!role.editable) {
-      return { success: true, message: `성공! 하지만 봇 역할이 \`${role.name}\`보다 아래에 있어 역할은 지급하지 못했습니다.` };
+      return { success: true, message: `🎉 **성공!** 하지만 봇 역할이 \`${role.name}\`보다 아래에 있어 역할은 지급하지 못했습니다.` };
     }
 
     if (!member.roles.cache.has(role.id)) {
@@ -180,14 +271,14 @@ async function runRoulette(interaction) {
         await member.roles.add(role.id);
       } catch (roleError) {
         console.error("Failed to add roulette role:", roleError);
-        return { success: true, message: `성공! ${role.name} 역할 지급은 실패했지만 당첨은 인정되었습니다.` };
+        return { success: true, message: `🎉 **성공!** ${role.name} 역할 지급은 실패했지만 당첨은 인정되었습니다.` };
       }
     }
 
-    return { success: true, message: `성공! ${role.name} 역할을 획득했습니다. (확률 ${randomRoleChancePercent}%)` };
+    return { success: true, message: `🎉 **성공!** ${role.name} 역할을 획득했습니다. (확률 ${randomRoleChancePercent}%)` };
   } catch (error) {
     console.error("Failed to run roulette:", error);
-    return { success: true, message: "성공! 다만 역할 지급 중 문제가 발생했습니다." };
+    return { success: true, message: "🎉 **성공!** 다만 역할 지급 중 문제가 발생했습니다." };
   }
 }
 
@@ -196,7 +287,7 @@ async function registerCommands() {
   await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     body: commands,
   });
-  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트, /룰렛`);
+  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트, /룰렛, /룰렛초기화`);
 }
 
 client.once("ready", async () => {
@@ -286,8 +377,18 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (interaction.commandName === "룰렛") {
+    if (!isAdminInteraction(interaction)) {
+      const quota = consumeRouletteQuota(interaction.user.id);
+      if (!quota.allowed) {
+        await interaction.reply({ content: `❌ 오늘은 이미 ${rouletteDailyLimit}번 사용했습니다. 내일 다시 시도해주세요.`, flags: 64 });
+        return;
+      }
+    }
+
     const result = await runRoulette(interaction);
-    const publicMessage = `${interaction.user} | ${result.message}`;
+    const publicMessage = result.success
+      ? `${interaction.user} | 🎉 **성공!** ${result.message.replace(/^🎉 \*\*성공!\*\*\s*/, "")}`
+      : `${interaction.user} | ❌ **실패!** ${result.message.replace(/^❌ \*\*실패!\*\*\s*/, "")}`;
 
     if (result.success) {
       await interaction.reply({ content: result.message, flags: 64 });
@@ -309,6 +410,23 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
+    return;
+  }
+
+  if (interaction.commandName === "룰렛초기화") {
+    if (!isAdminInteraction(interaction)) {
+      await interaction.reply({ content: "❌ 관리자만 사용할 수 있습니다.", flags: 64 });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser("대상");
+    if (!targetUser) {
+      await interaction.reply({ content: "❌ 초기화할 사용자를 찾을 수 없습니다.", flags: 64 });
+      return;
+    }
+
+    resetRouletteQuotaForUser(targetUser.id);
+    await interaction.reply({ content: `✅ ${targetUser.tag} 님의 오늘 룰렛 횟수를 초기화했습니다.`, flags: 64 });
     return;
   }
 });
