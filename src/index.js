@@ -101,9 +101,25 @@ async function maybeAwardRandomRole(interaction) {
   try {
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const role = await interaction.guild.roles.fetch(randomRoleId);
+    const botMember = interaction.guild.members.me;
 
     if (!role) {
       console.error(`Random role ${randomRoleId} not found.`);
+      return false;
+    }
+
+    if (!botMember) {
+      console.error("Bot member could not be resolved in guild.");
+      return false;
+    }
+
+    if (!botMember.permissions.has("ManageRoles")) {
+      console.error("Bot is missing Manage Roles permission.");
+      return false;
+    }
+
+    if (!role.editable) {
+      console.error(`Role ${role.name} is not editable by the bot. Move the bot role above ${role.name}.`);
       return false;
     }
 
@@ -113,10 +129,23 @@ async function maybeAwardRandomRole(interaction) {
 
     await member.roles.add(role.id);
     console.log(`Random role awarded: ${role.name} -> ${interaction.user.tag}`);
+    const botMember = interaction.guild.members.me;
     return true;
   } catch (error) {
     console.error("Failed to award random role:", error);
     return false;
+
+    if (!botMember) {
+      return { success: true, message: "성공! 하지만 봇 멤버를 확인할 수 없어 역할은 지급하지 못했습니다." };
+    }
+
+    if (!botMember.permissions.has("ManageRoles")) {
+      return { success: true, message: "성공! 하지만 봇에 역할 관리 권한이 없어 역할은 지급하지 못했습니다." };
+    }
+
+    if (!role.editable) {
+      return { success: true, message: `성공! 하지만 봇 역할이 \`${role.name}\`보다 아래에 있어 역할은 지급하지 못했습니다.` };
+    }
   }
 }
 
