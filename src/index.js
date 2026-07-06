@@ -129,23 +129,10 @@ async function maybeAwardRandomRole(interaction) {
 
     await member.roles.add(role.id);
     console.log(`Random role awarded: ${role.name} -> ${interaction.user.tag}`);
-    const botMember = interaction.guild.members.me;
     return true;
   } catch (error) {
     console.error("Failed to award random role:", error);
     return false;
-
-    if (!botMember) {
-      return { success: true, message: "성공! 하지만 봇 멤버를 확인할 수 없어 역할은 지급하지 못했습니다." };
-    }
-
-    if (!botMember.permissions.has("ManageRoles")) {
-      return { success: true, message: "성공! 하지만 봇에 역할 관리 권한이 없어 역할은 지급하지 못했습니다." };
-    }
-
-    if (!role.editable) {
-      return { success: true, message: `성공! 하지만 봇 역할이 \`${role.name}\`보다 아래에 있어 역할은 지급하지 못했습니다.` };
-    }
   }
 }
 
@@ -170,19 +157,37 @@ async function runRoulette(interaction) {
   try {
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const role = await interaction.guild.roles.fetch(randomRoleId);
+    const botMember = interaction.guild.members.me;
 
     if (!role) {
       return { success: false, message: "지정한 역할을 찾을 수 없습니다." };
     }
 
+    if (!botMember) {
+      return { success: true, message: "성공! 하지만 봇 멤버를 확인할 수 없어 역할은 지급하지 못했습니다." };
+    }
+
+    if (!botMember.permissions.has("ManageRoles")) {
+      return { success: true, message: "성공! 하지만 봇에 역할 관리 권한이 없어 역할은 지급하지 못했습니다." };
+    }
+
+    if (!role.editable) {
+      return { success: true, message: `성공! 하지만 봇 역할이 \`${role.name}\`보다 아래에 있어 역할은 지급하지 못했습니다.` };
+    }
+
     if (!member.roles.cache.has(role.id)) {
-      await member.roles.add(role.id);
+      try {
+        await member.roles.add(role.id);
+      } catch (roleError) {
+        console.error("Failed to add roulette role:", roleError);
+        return { success: true, message: `성공! ${role.name} 역할 지급은 실패했지만 당첨은 인정되었습니다.` };
+      }
     }
 
     return { success: true, message: `성공! ${role.name} 역할을 획득했습니다. (확률 ${randomRoleChancePercent}%)` };
   } catch (error) {
     console.error("Failed to run roulette:", error);
-    return { success: false, message: "룰렛 처리 중 오류가 발생했습니다." };
+    return { success: true, message: "성공! 다만 역할 지급 중 문제가 발생했습니다." };
   }
 }
 
