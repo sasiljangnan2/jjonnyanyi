@@ -22,7 +22,7 @@ const dailyCronTimezone = (process.env.DAILY_TIMEZONE || "Asia/Seoul").trim();
 const randomRoleId = (process.env.RANDOM_ROLE_ID || "").trim();
 const randomRoleChancePercent = Number(process.env.RANDOM_ROLE_CHANCE_PERCENT || 10);
 const rouletteUsagePath = path.join(__dirname, "..", "roulette_usage.json");
-const rouletteDailyLimit = 3;
+const rouletteDailyLimit = Number(process.env.ROULETTE_DAILY_LIMIT || 3);
 const rouletteRemovalTimers = new Map();
 const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
 
