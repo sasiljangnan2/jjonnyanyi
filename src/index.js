@@ -21,10 +21,13 @@ const dailyChannelId = (process.env.DAILY_CHANNEL_ID || "").trim();
 const dailyCronTimezone = (process.env.DAILY_TIMEZONE || "Asia/Seoul").trim();
 const randomRoleId = (process.env.RANDOM_ROLE_ID || "").trim();
 const randomRoleChancePercent = Number(process.env.RANDOM_ROLE_CHANCE_PERCENT || 10);
+const loseRoleId = (process.env.LOSE_ROLE_ID || "").trim();
+const loseRoleChancePercent = Number(process.env.LOSE_ROLE_CHANCE_PERCENT || 10);
 const rouletteUsagePath = path.join(__dirname, "..", "roulette_usage.json");
 const rouletteDailyLimit = Number(process.env.ROULETTE_DAILY_LIMIT || 3);
 const rouletteRemovalTimers = new Map();
 const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
+const loseRoleRemovalDelayMs = Number(process.env.LOSE_ROLE_REMOVAL_DELAY_MS || rouletteRoleRemovalDelayMs);
 
 if (!token) {
   console.error("DISCORD_TOKEN is missing. Add it to your .env file.");
@@ -115,6 +118,14 @@ function getSeoulDateKey(date = new Date()) {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+function getMsUntilMidnightSeoul() {
+  const now = new Date();
+  const seoulTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const seoulMidnight = new Date(seoulTime);
+  seoulMidnight.setUTCHours(24, 0, 0, 0);
+  return seoulMidnight.getTime() - seoulTime.getTime();
 }
 
 function readRouletteUsage() {
@@ -289,51 +300,78 @@ async function runRoulette(interaction) {
     }
 
   const roll = Math.random() * 100;
-  if (roll >= randomRoleChancePercent) {
-    return { success: false, message: `❌ **꽝이다냥!** (확률 ${randomRoleChancePercent}%)` };
-  }
+  
+  if (roll < randomRoleChancePercent) {
+    try {
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const role = await interaction.guild.roles.fetch(randomRoleId);
+      const botMember = interaction.guild.members.me;
 
-  try {
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const role = await interaction.guild.roles.fetch(randomRoleId);
-    const botMember = interaction.guild.members.me;
-
-    if (!role) {
-      return { success: false, message: "❌ **꽝이다냥!** 지정한 역할이 안 보인다냥." };
-    }
-
-    if (!botMember) {
-      return { success: true, message: "🎀 **당첨이다냥!** 근데 봇 멤버 확인이 안 돼서 역할은 못 줬다냥." };
-    }
-
-    if (!botMember.permissions.has("ManageRoles")) {
-      return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 관리 권한이 없어서 못 줬다냥." };
-    }
-
-    if (!role.editable) {
-      return { success: true, message: `🎀 **당첨이다냥!** 근데 봇 역할이 \`${role.name}\`보다 아래라서 못 줬다냥.` };
-    }
-
-    if (!member.roles.cache.has(role.id)) {
-      try {
-        await member.roles.add(role.id);
-      } catch (roleError) {
-        console.error("Failed to add roulette role:", roleError);
-        return { success: true, message: `🎀 **당첨이다냥!** ${role.name} 지급은 실패했지만 당첨은 인정이다냥.` };
+      if (!role) {
+        return { success: false, message: "❌ **꽝이다냥!** 지정한 역할이 안 보인다냥." };
       }
 
-      return {
-        success: true,
-        message: `🎀 **당첨이다냥!** ${role.name} 역할 획득했다냥! (확률 ${randomRoleChancePercent}%)`,
-        grantedRoleId: role.id,
-      };
-    }
+      if (!botMember) {
+        return { success: true, message: "🎀 **당첨이다냥!** 근데 봇 멤버 확인이 안 돼서 역할은 못 줬다냥." };
+      }
 
-    return { success: true, message: `🎀 **당첨이다냥!** 이미 ${role.name} 역할 가지고 있다냥. (확률 ${randomRoleChancePercent}%)` };
-  } catch (error) {
-    console.error("Failed to run roulette:", error);
-    return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 지급 중에 문제 터졌다냥." };
+      if (!botMember.permissions.has("ManageRoles")) {
+        return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 관리 권한이 없어서 못 줬다냥." };
+      }
+
+      if (!role.editable) {
+        return { success: true, message: `🎀 **당첨이다냥!** 근데 봇 역할이 \`${role.name}\`보다 아래라서 못 줬다냥.` };
+      }
+
+      if (!member.roles.cache.has(role.id)) {
+        try {
+          await member.roles.add(role.id);
+        } catch (roleError) {
+          console.error("Failed to add roulette role:", roleError);
+          return { success: true, message: `🎀 **당첨이다냥!** ${role.name} 지급은 실패했지만 당첨은 인정이다냥.` };
+        }
+
+        return {
+          success: true,
+          message: `🎀 **당첨이다냥!** ${role.name} 역할 획득했다냥! (당첨 확률 ${randomRoleChancePercent}%)`,
+          grantedRoleId: role.id,
+          removalDelayMs: getMsUntilMidnightSeoul()
+        };
+      }
+
+      return { success: true, message: `🎀 **당첨이다냥!** 이미 ${role.name} 역할 가지고 있다냥. (당첨 확률 ${randomRoleChancePercent}%)` };
+    } catch (error) {
+      console.error("Failed to run roulette:", error);
+      return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 지급 중에 문제 터졌다냥." };
+    }
+  } else if (loseRoleId && roll >= 100 - loseRoleChancePercent) {
+    try {
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const role = await interaction.guild.roles.fetch(loseRoleId);
+      const botMember = interaction.guild.members.me;
+
+      if (!role || !botMember || !botMember.permissions.has("ManageRoles") || !role.editable) {
+        return { success: false, message: "💀 **유배 확정이다냥!** 근데 냥이가 유배 보낼 권한이 없다냥. 운 좋은 줄 알아라냥." };
+      }
+
+      if (!member.roles.cache.has(role.id)) {
+        await member.roles.add(role.id);
+        return {
+          success: false,
+          message: `💀 **유배 확정이다냥!** 짐 싸서 당장 떠나라냥! (${role.name} 유배, 확률 ${loseRoleChancePercent}%)`,
+          grantedRoleId: role.id,
+          removalDelayMs: loseRoleRemovalDelayMs,
+          isPenalty: true
+        };
+      }
+      return { success: false, message: `💀 **유배 확정이다냥!** 이미 유배 중이면서 또 가고 싶냐냥? (확률 ${loseRoleChancePercent}%)`, isPenalty: true };
+    } catch (error) {
+      console.error("Failed to run penalty roulette:", error);
+      return { success: false, message: "💀 **유배 확정이다냥!** 근데 유배 보내다가 시스템 문제 터졌다냥." };
+    }
   }
+
+  return { success: false, message: `❌ **그냥 꽝이다냥!** (당첨 확률 ${randomRoleChancePercent}%, 대박 꽝 확률 ${loseRoleChancePercent || 0}%)` };
 }
 
 async function registerCommands() {
@@ -431,6 +469,12 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (interaction.commandName === "룰렛") {
+    const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
+    if (member && loseRoleId && member.roles.cache.has(loseRoleId)) {
+      await interaction.reply({ content: "❌ 유배 간 죄인은 룰렛 못 돌린다냥! 반성이나 해라냥!", flags: 64 });
+      return;
+    }
+
     if (!isAdminInteraction(interaction)) {
       const quota = consumeRouletteQuota(interaction.user.id);
       if (!quota.allowed) {
@@ -451,8 +495,8 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (result.grantedRoleId && rouletteRoleRemovalDelayMs > 0) {
-        scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId);
+      if (result.grantedRoleId && (result.removalDelayMs || rouletteRoleRemovalDelayMs) > 0) {
+        scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs || rouletteRoleRemovalDelayMs);
       }
 
       return;
@@ -464,6 +508,10 @@ client.on("interactionCreate", async (interaction) => {
       interaction.channel.send({ content: publicMessage }).catch((error) => {
         console.error("Failed to post roulette failure message to channel:", error);
       });
+    }
+
+    if (result.grantedRoleId && (result.removalDelayMs || rouletteRoleRemovalDelayMs) > 0) {
+      scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs || rouletteRoleRemovalDelayMs);
     }
 
     return;
