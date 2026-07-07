@@ -92,6 +92,10 @@ const commands = [
         .setRequired(true)
     )
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("타패추천")
+    .setDescription("쫀냥이가 버릴 패를 골라준다냥!")
+    .toJSON(),
 ];
 
 async function sendStickerByNameToChannel(guild, channelId, stickerName) {
@@ -521,6 +525,18 @@ client.on("interactionCreate", async (interaction) => {
 
     resetRouletteQuotaForUser(targetUser.id);
     await interaction.reply({ content: `✅ ${targetUser.tag} 오늘 룰렛 횟수 초기화 끝났다냥.` });
+    return;
+  }
+
+  if (interaction.commandName === "타패추천") {
+    const tiles = [
+      "1만", "2만", "3만", "4만", "5만", "6만", "7만", "8만", "9만",
+      "1통", "2통", "3통", "4통", "5통", "6통", "7통", "8통", "9통",
+      "1삭", "2삭", "3삭", "4삭", "5삭", "6삭", "7삭", "8삭", "9삭",
+      "동", "남", "서", "북", "백", "발", "중"
+    ];
+    const dropTile = tiles[Math.floor(Math.random() * tiles.length)];
+    await interaction.reply({ content: `🀄 이번엔 **${dropTile}** (을)를 버려라냥! 책임은 안 진다냥~` });
     return;
   }
 });
