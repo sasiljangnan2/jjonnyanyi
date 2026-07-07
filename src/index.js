@@ -358,20 +358,20 @@ async function runRoulette(interaction) {
         await member.roles.add(role.id);
         return {
           success: false,
-          message: `💀 **유배 확정이다냥!** 짐 싸서 당장 떠나라냥! (${role.name} 유배, 확률 ${loseRoleChancePercent}%)`,
+          message: `💀 **유배 확정이다냥!** 짐 싸서 당장 떠나라냥!`,
           grantedRoleId: role.id,
           removalDelayMs: loseRoleRemovalDelayMs,
           isPenalty: true
         };
       }
-      return { success: false, message: `💀 **유배 확정이다냥!** 이미 유배 중이면서 또 가고 싶냐냥? (확률 ${loseRoleChancePercent}%)`, isPenalty: true };
+      return { success: false, message: `💀 **유배 확정이다냥!** 이미 유배 중이면서 또 가고 싶냐냥? `, isPenalty: true };
     } catch (error) {
       console.error("Failed to run penalty roulette:", error);
       return { success: false, message: "💀 **유배 확정이다냥!** 근데 유배 보내다가 시스템 문제 터졌다냥." };
     }
   }
 
-  return { success: false, message: `❌ **그냥 꽝이다냥!** (당첨 확률 ${randomRoleChancePercent}%, 대박 꽝 확률 ${loseRoleChancePercent || 0}%)` };
+  return { success: false, message: `❌ **꽝이다냥!**` };
 }
 
 async function registerCommands() {
@@ -420,7 +420,7 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === "안녕") {
-    await interaction.reply("<:ema:1463844904307261450> 냥! 이치히메 등장이다냥~");
+    await interaction.reply("<:ema:1463844904307261450> 냥! 쫀냥이 등장이다냥~");
     await maybeAwardRandomRole(interaction);
   }
 
@@ -428,19 +428,19 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const guild = interaction.guild;
       if (!guild) {
-        await interaction.reply({ content: "서버에서만 쓸 수 있다냥.", flags: 64 });
+        await interaction.reply({ content: "서버에서만 쓸 수 있다냥." });
         return;
       }
 
       await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
-      await interaction.reply({ content: `스티커 발사 완료다냥: ${dailyStickerName}`, flags: 64 });
+      await interaction.reply({ content: `스티커 발사 완료다냥: ${dailyStickerName}` });
       await maybeAwardRandomRole(interaction);
     } catch (error) {
       console.error("2시 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: "문제가 생겼다냥.", flags: 64 });
+        await interaction.followUp({ content: "문제가 생겼다냥." });
       } else {
-        await interaction.reply({ content: "스티커 가져오다가 문제 생겼다냥.", flags: 64 });
+        await interaction.reply({ content: "스티커 가져오다가 문제 생겼다냥." });
       }
     }
     return;
@@ -450,19 +450,19 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const guild = interaction.guild;
       if (!guild) {
-        await interaction.reply({ content: "서버에서만 쓸 수 있다냥.", flags: 64 });
+        await interaction.reply({ content: "서버에서만 쓸 수 있다냥." });
         return;
       }
 
       await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
-      await interaction.reply({ content: `테스트 발사 끝났다냥: ${dailyStickerName}`, flags: 64 });
+      await interaction.reply({ content: `테스트 발사 끝났다냥: ${dailyStickerName}` });
       await maybeAwardRandomRole(interaction);
     } catch (error) {
       console.error("2시테스트 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
+        await interaction.followUp({ content: "테스트 중 문제 생겼다냥." });
       } else {
-        await interaction.reply({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
+        await interaction.reply({ content: "테스트 중 문제 생겼다냥." });
       }
     }
     return;
@@ -471,14 +471,16 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "룰렛") {
     const member = await interaction.guild?.members.fetch(interaction.user.id).catch(() => null);
     if (member && loseRoleId && member.roles.cache.has(loseRoleId)) {
-      await interaction.reply({ content: "❌ 유배 간 죄인은 룰렛 못 돌린다냥! 반성이나 해라냥!", flags: 64 });
+      const penaltyMsg = "❌ 유배 간 죄인은 룰렛 못 돌린다냥! 반성이나 해라냥!";
+      await interaction.reply({ content: `${interaction.user} | ${penaltyMsg}` });
       return;
     }
 
     if (!isAdminInteraction(interaction)) {
       const quota = consumeRouletteQuota(interaction.user.id);
       if (!quota.allowed) {
-        await interaction.reply({ content: `❌ 오늘은 이미 ${rouletteDailyLimit}번 돌렸다냥. 내일 다시 와라냥.`, flags: 64 });
+        const limitMsg = `❌ 오늘은 이미 ${rouletteDailyLimit}번 돌렸다냥. 내일 다시 와라냥.`;
+        await interaction.reply({ content: `${interaction.user} | ${limitMsg}` });
         return;
       }
     }
@@ -487,13 +489,7 @@ client.on("interactionCreate", async (interaction) => {
     const publicMessage = `${interaction.user} | ${result.message}`;
 
     if (result.success) {
-      await interaction.reply({ content: result.message, flags: 64 });
-
-      if (interaction.channel?.isTextBased()) {
-        interaction.channel.send({ content: publicMessage }).catch((error) => {
-          console.error("Failed to post roulette success message to channel:", error);
-        });
-      }
+      await interaction.reply({ content: publicMessage });
 
       if (result.grantedRoleId && (result.removalDelayMs || rouletteRoleRemovalDelayMs) > 0) {
         scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs || rouletteRoleRemovalDelayMs);
@@ -502,13 +498,7 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    await interaction.reply({ content: result.message, flags: 64 });
-
-    if (interaction.channel?.isTextBased()) {
-      interaction.channel.send({ content: publicMessage }).catch((error) => {
-        console.error("Failed to post roulette failure message to channel:", error);
-      });
-    }
+    await interaction.reply({ content: publicMessage });
 
     if (result.grantedRoleId && (result.removalDelayMs || rouletteRoleRemovalDelayMs) > 0) {
       scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs || rouletteRoleRemovalDelayMs);
@@ -519,18 +509,18 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "룰렛초기화") {
     if (!isAdminInteraction(interaction)) {
-      await interaction.reply({ content: "❌ 관리자만 쓸 수 있다냥.", flags: 64 });
+      await interaction.reply({ content: "❌ 관리자만 쓸 수 있다냥." });
       return;
     }
 
     const targetUser = interaction.options.getUser("대상");
     if (!targetUser) {
-      await interaction.reply({ content: "❌ 초기화할 대상을 못 찾았다냥.", flags: 64 });
+      await interaction.reply({ content: "❌ 초기화할 대상을 못 찾았다냥." });
       return;
     }
 
     resetRouletteQuotaForUser(targetUser.id);
-    await interaction.reply({ content: `✅ ${targetUser.tag} 오늘 룰렛 횟수 초기화 끝났다냥.`, flags: 64 });
+    await interaction.reply({ content: `✅ ${targetUser.tag} 오늘 룰렛 횟수 초기화 끝났다냥.` });
     return;
   }
 });
