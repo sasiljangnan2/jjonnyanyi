@@ -333,13 +333,13 @@ async function runRoulette(interaction) {
 
         return {
           success: true,
-          message: `🎀 **당첨이다냥!** ${role.name} 역할 획득했다냥! (당첨 확률 ${randomRoleChancePercent}%)`,
+          message: `🎀 **당첨이다냥!** ${role.name} 역할 획득했다냥!`,
           grantedRoleId: role.id,
           removalDelayMs: getMsUntilMidnightSeoul()
         };
       }
 
-      return { success: true, message: `🎀 **당첨이다냥!** 이미 ${role.name} 역할 가지고 있다냥. (당첨 확률 ${randomRoleChancePercent}%)` };
+      return { success: true, message: `🎀 **당첨이다냥!** 이미 ${role.name} 역할 가지고 있다냥.` };
     } catch (error) {
       console.error("Failed to run roulette:", error);
       return { success: true, message: "🎀 **당첨이다냥!** 근데 역할 지급 중에 문제 터졌다냥." };
