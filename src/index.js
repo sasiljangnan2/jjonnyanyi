@@ -428,19 +428,19 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const guild = interaction.guild;
       if (!guild) {
-        await interaction.reply({ content: "서버에서만 쓸 수 있다냥." });
+        await interaction.reply({ content: "서버에서만 쓸 수 있다냥.", flags: 64 });
         return;
       }
 
       await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
-      await interaction.reply({ content: `스티커 발사 완료다냥: ${dailyStickerName}` });
+      await interaction.reply({ content: `스티커 발사 완료다냥: ${dailyStickerName}`, flags: 64 });
       await maybeAwardRandomRole(interaction);
     } catch (error) {
       console.error("2시 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: "문제가 생겼다냥." });
+        await interaction.followUp({ content: "문제가 생겼다냥.", flags: 64 });
       } else {
-        await interaction.reply({ content: "스티커 가져오다가 문제 생겼다냥." });
+        await interaction.reply({ content: "스티커 가져오다가 문제 생겼다냥.", flags: 64 });
       }
     }
     return;
@@ -450,19 +450,19 @@ client.on("interactionCreate", async (interaction) => {
     try {
       const guild = interaction.guild;
       if (!guild) {
-        await interaction.reply({ content: "서버에서만 쓸 수 있다냥." });
+        await interaction.reply({ content: "서버에서만 쓸 수 있다냥.", flags: 64 });
         return;
       }
 
       await sendStickerByNameToChannel(guild, interaction.channelId, dailyStickerName);
-      await interaction.reply({ content: `테스트 발사 끝났다냥: ${dailyStickerName}` });
+      await interaction.reply({ content: `테스트 발사 끝났다냥: ${dailyStickerName}`, flags: 64 });
       await maybeAwardRandomRole(interaction);
     } catch (error) {
       console.error("2시테스트 명령어 실행 중 오류:", error);
       if (interaction.replied || interaction.deferred) {
-        await interaction.followUp({ content: "테스트 중 문제 생겼다냥." });
+        await interaction.followUp({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
       } else {
-        await interaction.reply({ content: "테스트 중 문제 생겼다냥." });
+        await interaction.reply({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
       }
     }
     return;
