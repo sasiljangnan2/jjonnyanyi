@@ -126,10 +126,17 @@ function getSeoulDateKey(date = new Date()) {
 
 function getMsUntilMidnightSeoul() {
   const now = new Date();
-  const seoulTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  const seoulMidnight = new Date(seoulTime);
-  seoulMidnight.setUTCHours(24, 0, 0, 0);
-  return seoulMidnight.getTime() - seoulTime.getTime();
+  // 현재 서울 시각을 구한다 (년/월/일 기준)
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const [year, month, day] = formatter.format(now).split("-").map(Number);
+  // 다음 자정 = 오늘 날짜 + 1일 00:00:00 KST (= UTC+9)
+  const midnightKST = new Date(Date.UTC(year, month - 1, day + 1, 0, 0, 0) - 9 * 60 * 60 * 1000);
+  return midnightKST.getTime() - now.getTime();
 }
 
 function readRouletteUsage() {
