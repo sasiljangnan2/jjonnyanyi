@@ -265,19 +265,31 @@ async function startVoiceSession(interaction) {
     session.activeUsers.add(userId);
 
     try {
+      const outputChannel = await interaction.guild.channels.fetch(session.outputChannelId).catch(() => null);
+      if (outputChannel && outputChannel.isTextBased()) {
+        const memberTag = interaction.guild.members.cache.get(userId)?.user?.tag || userId;
+        await outputChannel.send({ content: `🎙️ ${memberTag} 말하는 중... 인식 시작한다냥.` });
+      }
+
       const opusStream = connection.receiver.subscribe(userId, {
         end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
       });
       const text = await transcribeUserSpeech(interaction.guild, userId, session.outputChannelId, opusStream);
-      if (!text) return;
 
-      const outputChannel = await interaction.guild.channels.fetch(session.outputChannelId).catch(() => null);
       if (outputChannel && outputChannel.isTextBased()) {
         const memberTag = interaction.guild.members.cache.get(userId)?.user?.tag || userId;
-        await outputChannel.send({ content: `🗣️ ${memberTag}: ${text}` });
+        if (!text) {
+          await outputChannel.send({ content: `🗣️ ${memberTag} 말은 들었는데 인식 결과가 비어 있다냥.` });
+        } else {
+          await outputChannel.send({ content: `🗣️ ${memberTag}: ${text}` });
+        }
       }
     } catch (error) {
       console.error("Voice transcription failed:", error);
+      const outputChannel = await interaction.guild.channels.fetch(session.outputChannelId).catch(() => null);
+      if (outputChannel && outputChannel.isTextBased()) {
+        await outputChannel.send({ content: `⚠️ 음성 인식 실패했다냥: ${error.message || error}` }).catch(() => null);
+      }
     } finally {
       session.activeUsers.delete(userId);
     }

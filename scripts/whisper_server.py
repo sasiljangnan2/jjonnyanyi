@@ -3,11 +3,28 @@ import json
 import os
 import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import urlparse
 
 from faster_whisper import WhisperModel
 
 MODEL_CACHE = {}
+
+
+def load_dotenv_file(dotenv_path: Path):
+    if not dotenv_path.exists():
+        return
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
 def get_model(model_name: str):
@@ -79,6 +96,9 @@ class WhisperHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    project_root = Path(__file__).resolve().parent.parent
+    load_dotenv_file(project_root / ".env")
+
     parser = argparse.ArgumentParser(description="Local Whisper HTTP server")
     parser.add_argument("--host", default=os.environ.get("WHISPER_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("WHISPER_PORT", "8787")))
