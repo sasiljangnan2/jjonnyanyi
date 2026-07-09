@@ -530,22 +530,28 @@ function buildWavHeader(pcmDataLength, sampleRate = 16000, channels = 1, bitsPer
   return buffer;
 }
 
+function encodeHeaderBase64(value) {
+  return Buffer.from(String(value || ""), "utf8").toString("base64");
+}
+
 async function transcribeAudioFile(audioPath) {
   const audioBuffer = await fs.promises.readFile(audioPath);
 
   if (whisperApiUrl) {
+    const headers = {
+      "Content-Type": "audio/wav",
+      ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
+      "X-Whisper-Model": whisperModelName,
+      "X-Whisper-Language": whisperLanguage,
+      "X-Whisper-Beam-Size": String(whisperBeamSize),
+      "X-Whisper-Temperature": String(whisperTemperature),
+      ...(whisperInitialPrompt ? { "X-Whisper-Initial-Prompt-B64": encodeHeaderBase64(whisperInitialPrompt) } : {}),
+      ...(whisperHotwords ? { "X-Whisper-Hotwords-B64": encodeHeaderBase64(whisperHotwords) } : {}),
+    };
+
     const response = await fetch(whisperApiUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "audio/wav",
-        ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
-        "X-Whisper-Model": whisperModelName,
-        "X-Whisper-Language": whisperLanguage,
-        "X-Whisper-Beam-Size": String(whisperBeamSize),
-        "X-Whisper-Temperature": String(whisperTemperature),
-        ...(whisperInitialPrompt ? { "X-Whisper-Initial-Prompt": whisperInitialPrompt } : {}),
-        ...(whisperHotwords ? { "X-Whisper-Hotwords": whisperHotwords } : {}),
-      },
+      headers,
       body: audioBuffer,
     });
 

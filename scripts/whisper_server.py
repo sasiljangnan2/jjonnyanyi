@@ -1,4 +1,5 @@
 import argparse
+import base64
 import json
 import os
 import tempfile
@@ -9,6 +10,17 @@ from urllib.parse import urlparse
 from faster_whisper import WhisperModel
 
 MODEL_CACHE = {}
+
+
+def decode_b64_header(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    try:
+        return base64.b64decode(raw.encode("ascii"), validate=True).decode("utf-8")
+    except Exception:
+        return ""
 
 
 def is_cuda_library_error(error: Exception) -> bool:
@@ -163,6 +175,13 @@ class WhisperHandler(BaseHTTPRequestHandler):
             os.environ.get("WHISPER_INITIAL_PROMPT", "이 대화는 한국어 디스코드 음성 채팅이다. 단어를 자연스럽게 받아 적어라."),
         )
         hotwords = self.headers.get("X-Whisper-Hotwords", os.environ.get("WHISPER_HOTWORDS", "")).strip()
+
+        initial_prompt_b64 = decode_b64_header(self.headers.get("X-Whisper-Initial-Prompt-B64", ""))
+        hotwords_b64 = decode_b64_header(self.headers.get("X-Whisper-Hotwords-B64", ""))
+        if initial_prompt_b64:
+            initial_prompt = initial_prompt_b64
+        if hotwords_b64:
+            hotwords = hotwords_b64
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             temp_file.write(audio_data)
