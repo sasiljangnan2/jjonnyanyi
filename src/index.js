@@ -40,6 +40,10 @@ const whisperApiUrl = (process.env.WHISPER_API_URL || "").trim();
 const whisperApiKey = (process.env.WHISPER_API_KEY || "").trim();
 const whisperModelName = (process.env.WHISPER_MODEL || "base").trim();
 const whisperLanguage = (process.env.WHISPER_LANGUAGE || "ko").trim();
+const whisperBeamSize = Number(process.env.WHISPER_BEAM_SIZE || 5);
+const whisperTemperature = Number(process.env.WHISPER_TEMPERATURE || 0);
+const whisperInitialPrompt = (process.env.WHISPER_INITIAL_PROMPT || "").trim();
+const voiceAfterSilenceMs = Number(process.env.VOICE_AFTER_SILENCE_MS || 1500);
 const voiceWakeWord = (process.env.VOICE_WAKE_WORD || "쫀냥아").trim();
 const voiceCommandCooldownMs = Number(process.env.VOICE_COMMAND_COOLDOWN_MS || 3000);
 const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
@@ -318,6 +322,9 @@ async function transcribeAudioFile(audioPath) {
         ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
         "X-Whisper-Model": whisperModelName,
         "X-Whisper-Language": whisperLanguage,
+        "X-Whisper-Beam-Size": String(whisperBeamSize),
+        "X-Whisper-Temperature": String(whisperTemperature),
+        ...(whisperInitialPrompt ? { "X-Whisper-Initial-Prompt": whisperInitialPrompt } : {}),
       },
       body: audioBuffer,
     });
@@ -427,7 +434,7 @@ async function startVoiceSession(interaction) {
       }
 
       const opusStream = connection.receiver.subscribe(userId, {
-        end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
+        end: { behavior: EndBehaviorType.AfterSilence, duration: voiceAfterSilenceMs },
       });
       const text = await transcribeUserSpeech(interaction.guild, userId, session.outputChannelId, opusStream);
 

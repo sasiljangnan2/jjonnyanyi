@@ -61,34 +61,58 @@ def transcribe_with_fallback(model_name: str, audio_path: str, language: str, be
     cache_key = model_name.strip() or "base"
     preferred_device = os.environ.get("WHISPER_DEVICE", "cpu").strip() or "cpu"
     preferred_compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+    best_of = int(os.environ.get("WHISPER_BEST_OF", "5"))
+    patience = float(os.environ.get("WHISPER_PATIENCE", "1.2"))
+    condition_on_previous_text = os.environ.get("WHISPER_CONDITION_ON_PREVIOUS_TEXT", "false").strip().lower() == "true"
+    vad_filter = os.environ.get("WHISPER_VAD_FILTER", "true").strip().lower() == "true"
+    vad_min_silence_ms = int(os.environ.get("WHISPER_VAD_MIN_SILENCE_MS", "400"))
+    vad_speech_pad_ms = int(os.environ.get("WHISPER_VAD_SPEECH_PAD_MS", "350"))
+
+    decode_kwargs = {
+        "language": language,
+        "beam_size": beam_size,
+        "best_of": best_of,
+        "patience": patience,
+        "temperature": temperature,
+        "condition_on_previous_text": condition_on_previous_text,
+        "initial_prompt": initial_prompt,
+        "vad_filter": vad_filter,
+        "vad_parameters": {
+            "min_silence_duration_ms": vad_min_silence_ms,
+            "speech_pad_ms": vad_speech_pad_ms,
+        },
+    }
 
     try:
         model = get_model(model_name)
-        segments, _info = model.transcribe(
-            audio_path,
-            language=language,
-            vad_filter=True,
-            beam_size=beam_size,
-            temperature=temperature,
-            condition_on_previous_text=True,
-            initial_prompt=initial_prompt,
-        )
-        return "".join(segment.text for segment in segments).strip(), None
+        segments, _info = model.transcribe(audio_path, **decode_kwargs)
+        text = "".join(segment.text for segment in segments).strip()
+
+        if not text and vad_filter:
+            # Short command-style utterances can be clipped too hard by VAD.
+            retry_kwargs = dict(decode_kwargs)
+            retry_kwargs["vad_filter"] = False
+            retry_kwargs.pop("vad_parameters", None)
+            retry_segments, _retry_info = model.transcribe(audio_path, **retry_kwargs)
+            text = "".join(segment.text for segment in retry_segments).strip()
+
+        return text, None
     except Exception as error:
         if preferred_device != "cpu" and is_cuda_library_error(error):
             MODEL_CACHE.pop(cache_key, None)
             fallback_model = WhisperModel(cache_key, device="cpu", compute_type="int8")
             MODEL_CACHE[cache_key] = fallback_model
-            segments, _info = fallback_model.transcribe(
-                audio_path,
-                language=language,
-                vad_filter=True,
-                beam_size=beam_size,
-                temperature=temperature,
-                condition_on_previous_text=True,
-                initial_prompt=initial_prompt,
-            )
-            return "".join(segment.text for segment in segments).strip(), "cpu-fallback"
+            segments, _info = fallback_model.transcribe(audio_path, **decode_kwargs)
+            text = "".join(segment.text for segment in segments).strip()
+
+            if not text and vad_filter:
+                retry_kwargs = dict(decode_kwargs)
+                retry_kwargs["vad_filter"] = False
+                retry_kwargs.pop("vad_parameters", None)
+                retry_segments, _retry_info = fallback_model.transcribe(audio_path, **retry_kwargs)
+                text = "".join(segment.text for segment in retry_segments).strip()
+
+            return text, "cpu-fallback"
         raise error
 
 
@@ -185,6 +209,12 @@ def main():
             "compute_type": os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
             "beam_size": os.environ.get("WHISPER_BEAM_SIZE", "5"),
             "temperature": os.environ.get("WHISPER_TEMPERATURE", "0"),
+            "best_of": os.environ.get("WHISPER_BEST_OF", "5"),
+            "patience": os.environ.get("WHISPER_PATIENCE", "1.2"),
+            "condition_on_previous_text": os.environ.get("WHISPER_CONDITION_ON_PREVIOUS_TEXT", "false"),
+            "vad_filter": os.environ.get("WHISPER_VAD_FILTER", "true"),
+            "vad_min_silence_ms": os.environ.get("WHISPER_VAD_MIN_SILENCE_MS", "400"),
+            "vad_speech_pad_ms": os.environ.get("WHISPER_VAD_SPEECH_PAD_MS", "350"),
         },
         flush=True,
     )
