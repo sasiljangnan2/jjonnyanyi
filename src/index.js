@@ -36,6 +36,9 @@ const rouletteDailyLimit = Number(process.env.ROULETTE_DAILY_LIMIT || 3);
 const rouletteRemovalTimers = new Map();
 const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
 const loseRoleRemovalDelayMs = Number(process.env.LOSE_ROLE_REMOVAL_DELAY_MS || rouletteRoleRemovalDelayMs);
+const randomRoleDailyClearHour = Number(process.env.RANDOM_ROLE_DAILY_CLEAR_HOUR || 12);
+const randomRoleDailyClearMinute = Number(process.env.RANDOM_ROLE_DAILY_CLEAR_MINUTE || 0);
+const randomRoleDailyClearTimezone = (process.env.RANDOM_ROLE_DAILY_CLEAR_TIMEZONE || "Asia/Seoul").trim();
 const whisperApiUrl = (process.env.WHISPER_API_URL || "").trim();
 const whisperApiKey = (process.env.WHISPER_API_KEY || "").trim();
 const whisperModelName = (process.env.WHISPER_MODEL || "base").trim();
@@ -875,6 +878,39 @@ async function maybeAwardRandomRole(interaction) {
   }
 }
 
+async function clearRoleFromAllMembers(guildId, roleId, reasonLabel) {
+  try {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) {
+      console.error(`Guild ${guildId} not found for ${reasonLabel}.`);
+      return;
+    }
+
+    const role = await guild.roles.fetch(roleId).catch(() => null);
+    if (!role) {
+      console.error(`Role ${roleId} not found for ${reasonLabel}.`);
+      return;
+    }
+
+    await guild.members.fetch();
+    const targets = guild.members.cache.filter((member) => member.roles.cache.has(role.id));
+
+    let removedCount = 0;
+    for (const member of targets.values()) {
+      try {
+        await member.roles.remove(role.id, reasonLabel);
+        removedCount += 1;
+      } catch (error) {
+        console.error(`Failed to remove ${role.name} from ${member.user.tag}:`, error);
+      }
+    }
+
+    console.log(`${reasonLabel}: removed ${removedCount} member(s) from role ${role.name}.`);
+  } catch (error) {
+    console.error(`Failed to run ${reasonLabel}:`, error);
+  }
+}
+
 function scheduleRouletteRoleRemoval(guildId, userId, roleId, delayMs = rouletteRoleRemovalDelayMs) {
   const timerKey = `${guildId}:${userId}:${roleId}`;
   const existingTimer = rouletteRemovalTimers.get(timerKey);
@@ -970,7 +1006,6 @@ async function runRoulette(interaction) {
           success: true,
           message: `🎀 **당첨이다냥!** ${role.name} 역할 획득했다냥!`,
           grantedRoleId: role.id,
-          removalDelayMs: getMsUntilMidnightSeoul()
         };
       }
 
@@ -1049,6 +1084,17 @@ client.once("ready", async () => {
     }
   }, { timezone: dailyCronTimezone });
   console.log(`Daily 2:00 AM sticker job scheduled. timezone=${dailyCronTimezone}`);
+
+  const validClearHour = Number.isFinite(randomRoleDailyClearHour) ? Math.max(0, Math.min(23, randomRoleDailyClearHour)) : 12;
+  const validClearMinute = Number.isFinite(randomRoleDailyClearMinute) ? Math.max(0, Math.min(59, randomRoleDailyClearMinute)) : 0;
+
+  cron.schedule(`${validClearMinute} ${validClearHour} * * *`, async () => {
+    if (!randomRoleId) {
+      return;
+    }
+    await clearRoleFromAllMembers(guildId, randomRoleId, "daily-random-role-clear");
+  }, { timezone: randomRoleDailyClearTimezone });
+  console.log(`Daily random role clear scheduled at ${validClearHour}:${String(validClearMinute).padStart(2, "0")} (${randomRoleDailyClearTimezone})`);
 });
 
 client.on("interactionCreate", async (interaction) => {
@@ -1150,8 +1196,8 @@ client.on("interactionCreate", async (interaction) => {
     if (result.success) {
       await interaction.reply({ content: publicMessage });
 
-      if (result.grantedRoleId && (result.removalDelayMs || rouletteRoleRemovalDelayMs) > 0) {
-        scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs || rouletteRoleRemovalDelayMs);
+      if (result.isPenalty && result.grantedRoleId && Number.isFinite(result.removalDelayMs) && result.removalDelayMs > 0) {
+        scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs);
       }
 
       return;
@@ -1159,8 +1205,8 @@ client.on("interactionCreate", async (interaction) => {
 
     await interaction.reply({ content: publicMessage });
 
-    if (result.grantedRoleId && (result.removalDelayMs || rouletteRoleRemovalDelayMs) > 0) {
-      scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs || rouletteRoleRemovalDelayMs);
+    if (result.isPenalty && result.grantedRoleId && Number.isFinite(result.removalDelayMs) && result.removalDelayMs > 0) {
+      scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs);
     }
 
     return;
