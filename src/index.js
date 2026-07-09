@@ -53,6 +53,9 @@ const voiceWakeWordAliases = (process.env.VOICE_WAKE_WORD_ALIASES || "")
 const voiceAllowCommandWithoutWakeWord = (process.env.VOICE_ALLOW_COMMAND_WITHOUT_WAKE_WORD || "true").trim().toLowerCase() === "true";
 const voiceNoWakeMaxLength = Number(process.env.VOICE_NO_WAKE_MAX_LENGTH || 14);
 const voiceCommandCooldownMs = Number(process.env.VOICE_COMMAND_COOLDOWN_MS || 3000);
+const voiceIntentMinScore = Number(process.env.VOICE_INTENT_MIN_SCORE || 0.55);
+const voiceIntentAmbiguousGap = Number(process.env.VOICE_INTENT_AMBIGUOUS_GAP || 0.10);
+const voiceIntentDebug = (process.env.VOICE_INTENT_DEBUG || "false").trim().toLowerCase() === "true";
 const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
 const voiceSessions = new Map();
 const recentVoiceCommands = new Map();
@@ -294,19 +297,101 @@ function getWakeWordPrefixLength(normalizedText) {
 function detectVoiceCommand(commandText) {
   if (!commandText) return null;
 
-  if (/타패추천|타패추전|타패|버릴패|버릴페|버려패|버릴거/.test(commandText)) {
-    return "타패추천";
+  const intents = [
+    {
+      name: "타패추천",
+      patterns: ["타패추천", "타패추전", "타패", "버릴패", "버릴페", "버려패", "버릴거", "뭐버려"],
+    },
+    {
+      name: "패뽑기",
+      patterns: ["패뽑기", "패뽑", "패폭기", "패복기", "손패", "손페", "패줘", "패나눠"],
+    },
+    {
+      name: "역조합",
+      patterns: ["역조합", "역추천", "약조합", "역조합추천", "역골라", "역뭐", "야쿠"],
+    },
+    {
+      name: "안녕",
+      patterns: ["안녕", "안녀", "앙녕", "하이", "인사", "헬로", "반가워"],
+    },
+  ];
+
+  const topByIntent = intents.map((intent) => {
+    let best = 0;
+    for (const pattern of intent.patterns) {
+      const score = similarityScore(commandText, pattern);
+      if (score > best) best = score;
+    }
+    return { name: intent.name, score: best };
+  }).sort((a, b) => b.score - a.score);
+
+  const top = topByIntent[0];
+  const second = topByIntent[1] || { score: 0 };
+
+  if (!top || top.score < voiceIntentMinScore) {
+    return null;
   }
 
-  if (/패뽑기|패뽑|패폭기|패복기|손패|손페/.test(commandText)) {
-    return "패뽑기";
+  if (top.score - second.score < voiceIntentAmbiguousGap) {
+    return {
+      ambiguous: true,
+      candidates: [top.name, second.name],
+      topScore: top.score,
+      secondScore: second.score,
+    };
   }
 
-  if (/역조합|역추천|약조합|역조합추천/.test(commandText)) {
-    return "역조합";
+  return {
+    name: top.name,
+    ambiguous: false,
+    topScore: top.score,
+    secondScore: second.score,
+  };
+}
+
+function similarityScore(input, pattern) {
+  if (!input || !pattern) return 0;
+  if (input.includes(pattern)) return 1;
+
+  const edit = normalizedEditSimilarity(input, pattern);
+  const ngram = ngramJaccard(input, pattern, 2);
+
+  return Math.max(edit * 0.55 + ngram * 0.45, edit * 0.75, ngram * 0.75);
+}
+
+function normalizedEditSimilarity(a, b) {
+  const maxLen = Math.max(a.length, b.length, 1);
+  const dist = boundedEditDistance(a, b, maxLen);
+  return Math.max(0, 1 - dist / maxLen);
+}
+
+function ngramJaccard(a, b, n = 2) {
+  const setA = toNgramSet(a, n);
+  const setB = toNgramSet(b, n);
+  if (!setA.size || !setB.size) return 0;
+
+  let inter = 0;
+  for (const token of setA) {
+    if (setB.has(token)) inter += 1;
   }
 
-  return null;
+  const union = setA.size + setB.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+function toNgramSet(text, n) {
+  const set = new Set();
+  if (!text) return set;
+  if (text.length < n) {
+    set.add(text);
+    return set;
+  }
+
+  for (let i = 0; i <= text.length - n; i++) {
+    set.add(text.slice(i, i + n));
+  }
+
+  return set;
 }
 
 async function fetchGuildEmojiMap(guild) {
@@ -350,6 +435,10 @@ function buildRandomYakuMessage() {
   return `🀄 오늘의 역은 **${yaku.name}** (${yaku.han})이다냥!\n${yaku.desc}`;
 }
 
+function buildGreetingMessage() {
+  return "<:ema:1463844904307261450> 냥! 쫀냥이 등장이다냥~";
+}
+
 async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   const normalized = normalizeVoiceText(text);
   if (!normalized) return;
@@ -368,8 +457,19 @@ async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
     return;
   }
 
-  const detectedCommand = detectVoiceCommand(trimmed);
-  if (!detectedCommand) return;
+  const detected = detectVoiceCommand(trimmed);
+  if (!detected) return;
+
+  if (detected.ambiguous) {
+    if (wakeWordMatched) {
+      await outputChannel.send({
+        content: `🎤 <@${userId}> 명령이 애매하다냥. ${detected.candidates.join(" / ")} 중 하나로 짧게 다시 말해달라냥!`,
+      }).catch(() => null);
+    }
+    return;
+  }
+
+  const detectedCommand = detected.name;
 
   const dedupeKey = `${guild.id}:${userId}:${detectedCommand}`;
   const now = Date.now();
@@ -380,22 +480,31 @@ async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   recentVoiceCommands.set(dedupeKey, now);
 
   const mention = `<@${userId}>`;
+  const debugSuffix = voiceIntentDebug
+    ? ` (score ${detected.topScore.toFixed(2)}, next ${detected.secondScore.toFixed(2)})`
+    : "";
 
   if (detectedCommand === "타패추천") {
     const message = await buildRandomTileRecommendation(guild);
-    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 타패추천\n${message}` });
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 타패추천${debugSuffix}\n${message}` });
     return;
   }
 
   if (detectedCommand === "패뽑기") {
     const message = await buildRandomHandMessage(guild);
-    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 패뽑기\n${message}` });
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 패뽑기${debugSuffix}\n${message}` });
     return;
   }
 
   if (detectedCommand === "역조합") {
     const message = buildRandomYakuMessage();
-    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 역조합\n${message}` });
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 역조합${debugSuffix}\n${message}` });
+    return;
+  }
+
+  if (detectedCommand === "안녕") {
+    const message = buildGreetingMessage();
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 안녕${debugSuffix}\n${message}` });
   }
 }
 
@@ -914,7 +1023,7 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (interaction.commandName === "안녕") {
-    await interaction.reply("<:ema:1463844904307261450> 냥! 쫀냥이 등장이다냥~");
+    await interaction.reply(buildGreetingMessage());
     await maybeAwardRandomRole(interaction);
   }
 
