@@ -534,6 +534,11 @@ function encodeHeaderBase64(value) {
   return Buffer.from(String(value || ""), "utf8").toString("base64");
 }
 
+function isByteStringHeaderError(error) {
+  const message = String(error?.message || error || "");
+  return message.includes("Cannot convert argument to a ByteString");
+}
+
 async function transcribeAudioFile(audioPath) {
   const audioBuffer = await fs.promises.readFile(audioPath);
 
@@ -549,11 +554,30 @@ async function transcribeAudioFile(audioPath) {
       ...(whisperHotwords ? { "X-Whisper-Hotwords-B64": encodeHeaderBase64(whisperHotwords) } : {}),
     };
 
-    const response = await fetch(whisperApiUrl, {
-      method: "POST",
-      headers,
-      body: audioBuffer,
-    });
+    let response;
+    try {
+      response = await fetch(whisperApiUrl, {
+        method: "POST",
+        headers,
+        body: audioBuffer,
+      });
+    } catch (error) {
+      if (!isByteStringHeaderError(error)) {
+        throw error;
+      }
+
+      // Defensive fallback: retry with minimal ASCII-safe headers.
+      const fallbackHeaders = {
+        "Content-Type": "audio/wav",
+        ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
+      };
+
+      response = await fetch(whisperApiUrl, {
+        method: "POST",
+        headers: fallbackHeaders,
+        body: audioBuffer,
+      });
+    }
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
