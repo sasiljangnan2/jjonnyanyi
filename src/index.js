@@ -40,8 +40,11 @@ const whisperApiUrl = (process.env.WHISPER_API_URL || "").trim();
 const whisperApiKey = (process.env.WHISPER_API_KEY || "").trim();
 const whisperModelName = (process.env.WHISPER_MODEL || "base").trim();
 const whisperLanguage = (process.env.WHISPER_LANGUAGE || "ko").trim();
+const voiceWakeWord = (process.env.VOICE_WAKE_WORD || "쫀냥아").trim();
+const voiceCommandCooldownMs = Number(process.env.VOICE_COMMAND_COOLDOWN_MS || 3000);
 const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
 const voiceSessions = new Map();
+const recentVoiceCommands = new Map();
 
 fs.mkdirSync(voiceTempDir, { recursive: true });
 
@@ -129,6 +132,158 @@ const commands = [
     .setDescription("음성채팅 듣기를 멈추고 나간다냥!")
     .toJSON(),
 ];
+
+const tileRecommendationTypes = [
+  ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, emoji: `${i + 1}m` })),
+  ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, emoji: `${i + 1}p` })),
+  ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, emoji: `${i + 1}s` })),
+  { label: "동", emoji: "1z" }, { label: "남", emoji: "2z" },
+  { label: "서", emoji: "3z" }, { label: "북", emoji: "4z" },
+  { label: "백", emoji: "5z" }, { label: "발", emoji: "6z" },
+  { label: "중", emoji: "7z" },
+];
+
+const handTileTypes = [
+  ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, emoji: `${i + 1}m`, suit: 0, num: i + 1 })),
+  ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, emoji: `${i + 1}p`, suit: 1, num: i + 1 })),
+  ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, emoji: `${i + 1}s`, suit: 2, num: i + 1 })),
+  { label: "동", emoji: "1z", suit: 3, num: 1 }, { label: "남", emoji: "2z", suit: 3, num: 2 },
+  { label: "서", emoji: "3z", suit: 3, num: 3 }, { label: "북", emoji: "4z", suit: 3, num: 4 },
+  { label: "백", emoji: "5z", suit: 3, num: 5 }, { label: "발", emoji: "6z", suit: 3, num: 6 },
+  { label: "중", emoji: "7z", suit: 3, num: 7 },
+];
+
+const yakuRecommendationList = [
+  { name: "리치", han: "1판", desc: "멘젠 텐파이 후 리치 선언이다냥! 기본 중의 기본이냥!" },
+  { name: "멘젠쯔모", han: "1판", desc: "멘젠으로 쓰모 화료냥! 리치 없어도 된다냥!" },
+  { name: "핑후", han: "1판", desc: "멘젠 슌쯔 조합 + 양면 대기냥! 깔끔하냥!" },
+  { name: "탕야오", han: "1판", desc: "2~8 수패만으로 승부다냥! 자패 다 버려라냥!" },
+  { name: "이페코", han: "1판", desc: "같은 슌쯔 두 세트냥! 멘젠 한정이다냥!" },
+  { name: "역패 (백)", han: "1판", desc: "백을 커쯔 하나만 해도 역이다냥! 간단하냥!" },
+  { name: "역패 (발)", han: "1판", desc: "발을 커쯔 하나만 해도 역이다냥! 초록이 좋다냥!" },
+  { name: "역패 (중)", han: "1판", desc: "중을 커쯔 하나만 해도 역이다냥! 빨간 게 최고냥!" },
+  { name: "역패 (자풍)", han: "1판", desc: "내 자리 바람패 커쯔냥! 자리마다 다르다냥!" },
+  { name: "역패 (장풍)", han: "1판", desc: "현재 국 바람패 커쯔냥! 동장엔 동, 남장엔 남이다냥!" },
+  { name: "영상개화", han: "1판", desc: "깡 후 영전패 뽑아서 화료냥! 운도 실력이냥!" },
+  { name: "창깡", han: "1판", desc: "상대 가깡패에서 낚아채는 거다냥! 방심 금지냥!" },
+  { name: "해저로월", han: "1판", desc: "마지막 수패로 쓰모다냥! 끝까지 포기 금지냥!" },
+  { name: "하저로어", han: "1판", desc: "마지막 버림패로 론이다냥! 배짱 승부냥!" },
+  { name: "더블리치", han: "2판", desc: "첫 순에 바로 리치냥! 배포 있어야 쓸 수 있다냥!" },
+  { name: "치또이즈", han: "2판", desc: "대자 7쌍이다냥! 독자적인 손패 구성이냥!" },
+  { name: "삼색동순", han: "2판(오픈 1판)", desc: "세 종류에서 같은 숫자 슌쯔 세트냥! 깔끔하냥!" },
+  { name: "일기통관", han: "2판(오픈 1판)", desc: "한 종류로 1~9 슌쯔 연결이다냥! 개인기냥!" },
+  { name: "찬타", han: "2판(오픈 1판)", desc: "모든 세트에 1·9·자패 포함이냥!" },
+  { name: "산안커", han: "2판", desc: "커쯔 세 세트를 자력으로냥! 어렵지만 값지다냥!" },
+  { name: "삼색동각", han: "2판", desc: "세 종류에서 같은 숫자 커쯔냥! 숨은 고수냥!" },
+  { name: "산깡즈", han: "2판", desc: "깡을 세 번이나 하는 거다냥! 용감하냥!" },
+  { name: "또이또이", han: "2판", desc: "전부 커쯔냥! 슌쯔 한 세트도 없다냥!" },
+  { name: "소삼원", han: "2판", desc: "삼원패 두 커쯔 + 한 쌍이냥! 대삼원 전 단계냥!" },
+  { name: "혼노두", han: "2판", desc: "1·9·자패만으로 전부 커쯔냥! 또이또이나 치또이즈랑 같이 나온다냥!" },
+  { name: "혼일색", han: "3판(오픈 2판)", desc: "한 종류 수패 + 자패만이냥! 패 고르기가 핵심냥!" },
+  { name: "준찬타", han: "3판(오픈 2판)", desc: "모든 세트에 1이나 9만 넣는 거냥! 깐깐하냥!" },
+  { name: "량페코", han: "3판", desc: "이페코 두 세트냥! 멘젠 한정이냥! 진짜 멋지다냥!" },
+  { name: "청일색", han: "6판(오픈 5판)", desc: "한 종류 수패만으로 화료냥!! 화려하다냥!!" },
+  { name: "천화", han: "역만", desc: "동가 배패 직후 바로 화료냥!! 태어날 때부터 역만이냥!!" },
+  { name: "지화", han: "역만", desc: "자가 첫 쓰모로 바로 화료냥!! 하늘 아래 땅도 역만이냥!!" },
+  { name: "국사무쌍", han: "역만", desc: "1·9·자패 13종 + 1장 대기냥!! 고독하지만 강하다냥!!" },
+  { name: "쓰안커", han: "역만", desc: "커쯔 네 세트 전부 자력으로냥!! 아무도 못 막는다냥!!" },
+  { name: "대삼원", han: "역만", desc: "백·발·중 세 종류 전부 커쯔냥!! 삼원패 완전 제압이냥!!" },
+  { name: "소사희", han: "역만", desc: "동남서북 중 셋은 커쯔, 하나는 쌍이냥!! 바람의 역만이냥!!" },
+  { name: "자일색", han: "역만", desc: "자패만으로 화료냥!! 수패 한 장도 없다냥!!" },
+  { name: "녹일색", han: "역만", desc: "2·3·4·6·8삭 + 발만으로 화료냥!! 온통 초록이냥!!" },
+  { name: "청노두", han: "역만", desc: "1과 9 수패만으로 화료냥!! 극단의 역만이냥!!" },
+  { name: "쓰깡즈", han: "역만", desc: "깡을 무려 네 번이냥!! 패산이 무너질 것 같다냥!!" },
+  { name: "구련보등", han: "역만", desc: "한 종류로 1112345678999 + 1장 대기냥!! 꿈의 역이다냥!!" },
+  { name: "대사희", han: "더블 역만", desc: "동남서북 전부 커쯔냥!! 바람의 왕이다냥!!" },
+  { name: "쓰안커 단기", han: "더블 역만", desc: "커쯔 네 세트 자력 + 단기 대기냥!! 최강의 폼이냥!!" },
+  { name: "국사무쌍 13면", han: "더블 역만", desc: "13종 전부 대기냥!! 이건 전설이다냥!!" },
+  { name: "순정구련보등", han: "더블 역만", desc: "구련보등 9면 대기냥!! 이런 손패가 실제로 온다고?냥!!" },
+];
+
+function normalizeVoiceText(text) {
+  return String(text || "").replace(/\s+/g, "").toLowerCase();
+}
+
+async function fetchGuildEmojiMap(guild) {
+  const emojiMap = new Map();
+  if (!guild) return emojiMap;
+
+  const guildEmojis = await guild.emojis.fetch().catch(() => null);
+  if (!guildEmojis) return emojiMap;
+
+  guildEmojis.forEach((emoji) => {
+    emojiMap.set(emoji.name, `<:${emoji.name}:${emoji.id}>`);
+  });
+
+  return emojiMap;
+}
+
+async function buildRandomTileRecommendation(guild) {
+  const emojiMap = await fetchGuildEmojiMap(guild);
+  const dropTile = tileRecommendationTypes[Math.floor(Math.random() * tileRecommendationTypes.length)];
+  const tileDisplay = emojiMap.get(dropTile.emoji) || dropTile.label;
+  return `🀄 이번엔 **${tileDisplay}**를 버려라냥! 책임은 안 진다냥~`;
+}
+
+async function buildRandomHandMessage(guild) {
+  const deck = handTileTypes.flatMap((tile) => [tile, tile, tile, tile]);
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+
+  const hand = deck.slice(0, 13);
+  hand.sort((a, b) => a.suit - b.suit || a.num - b.num);
+
+  const emojiMap = await fetchGuildEmojiMap(guild);
+  const handStr = hand.map((tile) => emojiMap.get(tile.emoji) || tile.label).join("");
+  return `🀄 뽑은 손패다냥!\n${handStr}\n어떤 역을 노릴지는 네 자유다냥~`;
+}
+
+function buildRandomYakuMessage() {
+  const yaku = yakuRecommendationList[Math.floor(Math.random() * yakuRecommendationList.length)];
+  return `🀄 오늘의 역은 **${yaku.name}** (${yaku.han})이다냥!\n${yaku.desc}`;
+}
+
+async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
+  const normalized = normalizeVoiceText(text);
+  const wakeWord = normalizeVoiceText(voiceWakeWord);
+  if (!normalized.startsWith(wakeWord)) {
+    return;
+  }
+
+  const commandText = normalized.slice(wakeWord.length);
+  if (!commandText) {
+    return;
+  }
+
+  const dedupeKey = `${guild.id}:${userId}:${commandText}`;
+  const now = Date.now();
+  const lastUsedAt = recentVoiceCommands.get(dedupeKey) || 0;
+  if (now - lastUsedAt < voiceCommandCooldownMs) {
+    return;
+  }
+  recentVoiceCommands.set(dedupeKey, now);
+
+  const mention = `<@${userId}>`;
+
+  if (/타패추천|타패|버릴패/.test(commandText)) {
+    const message = await buildRandomTileRecommendation(guild);
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 타패추천\n${message}` });
+    return;
+  }
+
+  if (/패뽑기|패뽑|손패/.test(commandText)) {
+    const message = await buildRandomHandMessage(guild);
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 패뽑기\n${message}` });
+    return;
+  }
+
+  if (/역조합|역추천/.test(commandText)) {
+    const message = buildRandomYakuMessage();
+    await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 역조합\n${message}` });
+  }
+}
 
 function buildWavHeader(pcmDataLength, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
   const blockAlign = channels * (bitsPerSample / 8);
@@ -282,6 +437,7 @@ async function startVoiceSession(interaction) {
           await outputChannel.send({ content: `🗣️ ${memberTag} 말은 들었는데 인식 결과가 비어 있다냥.` });
         } else {
           await outputChannel.send({ content: `🗣️ ${memberTag}: ${text}` });
+          await maybeHandleVoiceCommand(interaction.guild, outputChannel, userId, text);
         }
       }
     } catch (error) {
@@ -769,120 +925,20 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (interaction.commandName === "패뽑기") {
-    const tileTypes = [
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, emoji: `${i + 1}m`, suit: 0, num: i + 1 })),
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, emoji: `${i + 1}p`, suit: 1, num: i + 1 })),
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, emoji: `${i + 1}s`, suit: 2, num: i + 1 })),
-      { label: "동", emoji: "1z", suit: 3, num: 1 }, { label: "남", emoji: "2z", suit: 3, num: 2 },
-      { label: "서", emoji: "3z", suit: 3, num: 3 }, { label: "북", emoji: "4z", suit: 3, num: 4 },
-      { label: "백", emoji: "5z", suit: 3, num: 5 }, { label: "발", emoji: "6z", suit: 3, num: 6 },
-      { label: "중", emoji: "7z", suit: 3, num: 7 },
-    ];
-    // 각 패 4장씩 136장 덱 생성
-    const deck = tileTypes.flatMap((t) => [t, t, t, t]);
-    // Fisher-Yates 셔플 후 13장 뽑기
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    const hand = deck.slice(0, 13);
-    // 만→통→삭→자패, 숫자 오름차순 정렬
-    hand.sort((a, b) => a.suit - b.suit || a.num - b.num);
-
-    // 서버 커스텀 이모지 가져오기
-    let emojiMap = new Map();
-    if (interaction.guild) {
-      const guildEmojis = await interaction.guild.emojis.fetch().catch(() => null);
-      if (guildEmojis) {
-        guildEmojis.forEach((e) => emojiMap.set(e.name, `<:${e.name}:${e.id}>`));
-      }
-    }
-
-    const handStr = hand.map((t) => emojiMap.get(t.emoji) || t.label).join("");
-    await interaction.reply({ content: `🀄 뽑은 손패다냥!\n${handStr}\n어떤 역을 노릴지는 네 자유다냥~` });
+    const message = await buildRandomHandMessage(interaction.guild);
+    await interaction.reply({ content: message });
     return;
   }
 
   if (interaction.commandName === "타패추천") {
-    const tileTypes = [
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, emoji: `${i + 1}m` })),
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, emoji: `${i + 1}p` })),
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, emoji: `${i + 1}s` })),
-      { label: "동", emoji: "1z" }, { label: "남", emoji: "2z" },
-      { label: "서", emoji: "3z" }, { label: "북", emoji: "4z" },
-      { label: "백", emoji: "5z" }, { label: "발", emoji: "6z" },
-      { label: "중", emoji: "7z" },
-    ];
-
-    let emojiMap = new Map();
-    if (interaction.guild) {
-      const guildEmojis = await interaction.guild.emojis.fetch().catch(() => null);
-      if (guildEmojis) {
-        guildEmojis.forEach((e) => emojiMap.set(e.name, `<:${e.name}:${e.id}>`));
-      }
-    }
-
-    const dropTile = tileTypes[Math.floor(Math.random() * tileTypes.length)];
-    const tileDisplay = emojiMap.get(dropTile.emoji) || dropTile.label;
-    await interaction.reply({ content: `🀄 이번엔 **${tileDisplay}**를 버려라냥! 책임은 안 진다냥~` });
+    const message = await buildRandomTileRecommendation(interaction.guild);
+    await interaction.reply({ content: message });
     return;
   }
 
   if (interaction.commandName === "역조합") {
-    const yakuList = [
-      // 1판
-      { name: "리치", han: "1판", desc: "멘젠 텐파이 후 리치 선언이다냥! 기본 중의 기본이냥!" },
-      { name: "멘젠쯔모", han: "1판", desc: "멘젠으로 쓰모 화료냥! 리치 없어도 된다냥!" },
-      { name: "핑후", han: "1판", desc: "멘젠 슌쯔 조합 + 양면 대기냥! 깔끔하냥!" },
-      { name: "탕야오", han: "1판", desc: "2~8 수패만으로 승부다냥! 자패 다 버려라냥!" },
-      { name: "이페코", han: "1판", desc: "같은 슌쯔 두 세트냥! 멘젠 한정이다냥!" },
-      { name: "역패 (백)", han: "1판", desc: "백을 커쯔 하나만 해도 역이다냥! 간단하냥!" },
-      { name: "역패 (발)", han: "1판", desc: "발을 커쯔 하나만 해도 역이다냥! 초록이 좋다냥!" },
-      { name: "역패 (중)", han: "1판", desc: "중을 커쯔 하나만 해도 역이다냥! 빨간 게 최고냥!" },
-      { name: "역패 (자풍)", han: "1판", desc: "내 자리 바람패 커쯔냥! 자리마다 다르다냥!" },
-      { name: "역패 (장풍)", han: "1판", desc: "현재 국 바람패 커쯔냥! 동장엔 동, 남장엔 남이다냥!" },
-      { name: "영상개화", han: "1판", desc: "깡 후 영전패 뽑아서 화료냥! 운도 실력이냥!" },
-      { name: "창깡", han: "1판", desc: "상대 가깡패에서 낚아채는 거다냥! 방심 금지냥!" },
-      { name: "해저로월", han: "1판", desc: "마지막 수패로 쓰모다냥! 끝까지 포기 금지냥!" },
-      { name: "하저로어", han: "1판", desc: "마지막 버림패로 론이다냥! 배짱 승부냥!" },
-      // 2판
-      { name: "더블리치", han: "2판", desc: "첫 순에 바로 리치냥! 배포 있어야 쓸 수 있다냥!" },
-      { name: "치또이즈", han: "2판", desc: "대자 7쌍이다냥! 독자적인 손패 구성이냥!" },
-      { name: "삼색동순", han: "2판(오픈 1판)", desc: "세 종류에서 같은 숫자 슌쯔 세트냥! 깔끔하냥!" },
-      { name: "일기통관", han: "2판(오픈 1판)", desc: "한 종류로 1~9 슌쯔 연결이다냥! 개인기냥!" },
-      { name: "찬타", han: "2판(오픈 1판)", desc: "모든 세트에 1·9·자패 포함이냥!" },
-      { name: "산안커", han: "2판", desc: "커쯔 세 세트를 자력으로냥! 어렵지만 값지다냥!" },
-      { name: "삼색동각", han: "2판", desc: "세 종류에서 같은 숫자 커쯔냥! 숨은 고수냥!" },
-      { name: "산깡즈", han: "2판", desc: "깡을 세 번이나 하는 거다냥! 용감하냥!" },
-      { name: "또이또이", han: "2판", desc: "전부 커쯔냥! 슌쯔 한 세트도 없다냥!" },
-      { name: "소삼원", han: "2판", desc: "삼원패 두 커쯔 + 한 쌍이냥! 대삼원 전 단계냥!" },
-      { name: "혼노두", han: "2판", desc: "1·9·자패만으로 전부 커쯔냥! 또이또이나 치또이즈랑 같이 나온다냥!" },
-      // 3판
-      { name: "혼일색", han: "3판(오픈 2판)", desc: "한 종류 수패 + 자패만이냥! 패 고르기가 핵심냥!" },
-      { name: "준찬타", han: "3판(오픈 2판)", desc: "모든 세트에 1이나 9만 넣는 거냥! 깐깐하냥!" },
-      { name: "량페코", han: "3판", desc: "이페코 두 세트냥! 멘젠 한정이냥! 진짜 멋지다냥!" },
-      // 6판
-      { name: "청일색", han: "6판(오픈 5판)", desc: "한 종류 수패만으로 화료냥!! 화려하다냥!!" },
-      // 역만
-      { name: "천화", han: "역만", desc: "동가 배패 직후 바로 화료냥!! 태어날 때부터 역만이냥!!" },
-      { name: "지화", han: "역만", desc: "자가 첫 쓰모로 바로 화료냥!! 하늘 아래 땅도 역만이냥!!" },
-      { name: "국사무쌍", han: "역만", desc: "1·9·자패 13종 + 1장 대기냥!! 고독하지만 강하다냥!!" },
-      { name: "쓰안커", han: "역만", desc: "커쯔 네 세트 전부 자력으로냥!! 아무도 못 막는다냥!!" },
-      { name: "대삼원", han: "역만", desc: "백·발·중 세 종류 전부 커쯔냥!! 삼원패 완전 제압이냥!!" },
-      { name: "소사희", han: "역만", desc: "동남서북 중 셋은 커쯔, 하나는 쌍이냥!! 바람의 역만이냥!!" },
-      { name: "자일색", han: "역만", desc: "자패만으로 화료냥!! 수패 한 장도 없다냥!!" },
-      { name: "녹일색", han: "역만", desc: "2·3·4·6·8삭 + 발만으로 화료냥!! 온통 초록이냥!!" },
-      { name: "청노두", han: "역만", desc: "1과 9 수패만으로 화료냥!! 극단의 역만이냥!!" },
-      { name: "쓰깡즈", han: "역만", desc: "깡을 무려 네 번이냥!! 패산이 무너질 것 같다냥!!" },
-      { name: "구련보등", han: "역만", desc: "한 종류로 1112345678999 + 1장 대기냥!! 꿈의 역이다냥!!" },
-      // 더블 역만
-      { name: "대사희", han: "더블 역만", desc: "동남서북 전부 커쯔냥!! 바람의 왕이다냥!!" },
-      { name: "쓰안커 단기", han: "더블 역만", desc: "커쯔 네 세트 자력 + 단기 대기냥!! 최강의 폼이냥!!" },
-      { name: "국사무쌍 13면", han: "더블 역만", desc: "13종 전부 대기냥!! 이건 전설이다냥!!" },
-      { name: "순정구련보등", han: "더블 역만", desc: "구련보등 9면 대기냥!! 이런 손패가 실제로 온다고?냥!!" },
-    ];
-    const yaku = yakuList[Math.floor(Math.random() * yakuList.length)];
-    await interaction.reply({ content: `🀄 오늘의 역은 **${yaku.name}** (${yaku.han})이다냥!\n${yaku.desc}` });
+    const message = buildRandomYakuMessage();
+    await interaction.reply({ content: message });
     return;
   }
 });

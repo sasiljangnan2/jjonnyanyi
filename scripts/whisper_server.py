@@ -11,6 +11,16 @@ from faster_whisper import WhisperModel
 MODEL_CACHE = {}
 
 
+def is_cuda_library_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "cublas64_12.dll" in message
+        or "cannot be loaded" in message
+        or "cannot find module" in message
+        or "cuda" in message
+    )
+
+
 def load_dotenv_file(dotenv_path: Path):
     if not dotenv_path.exists():
         return
@@ -30,10 +40,56 @@ def load_dotenv_file(dotenv_path: Path):
 def get_model(model_name: str):
     cache_key = model_name.strip() or "base"
     if cache_key not in MODEL_CACHE:
-        device = os.environ.get("WHISPER_DEVICE", "auto")
-        compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "auto")
-        MODEL_CACHE[cache_key] = WhisperModel(cache_key, device=device, compute_type=compute_type)
+        preferred_device = os.environ.get("WHISPER_DEVICE", "cpu").strip() or "cpu"
+        preferred_compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+
+        try:
+            MODEL_CACHE[cache_key] = WhisperModel(
+                cache_key,
+                device=preferred_device,
+                compute_type=preferred_compute_type,
+            )
+        except Exception as error:
+            if preferred_device != "cpu":
+                MODEL_CACHE[cache_key] = WhisperModel(cache_key, device="cpu", compute_type="int8")
+            else:
+                raise error
     return MODEL_CACHE[cache_key]
+
+
+def transcribe_with_fallback(model_name: str, audio_path: str, language: str, beam_size: int, temperature: float, initial_prompt: str):
+    cache_key = model_name.strip() or "base"
+    preferred_device = os.environ.get("WHISPER_DEVICE", "cpu").strip() or "cpu"
+    preferred_compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+
+    try:
+        model = get_model(model_name)
+        segments, _info = model.transcribe(
+            audio_path,
+            language=language,
+            vad_filter=True,
+            beam_size=beam_size,
+            temperature=temperature,
+            condition_on_previous_text=True,
+            initial_prompt=initial_prompt,
+        )
+        return "".join(segment.text for segment in segments).strip(), None
+    except Exception as error:
+        if preferred_device != "cpu" and is_cuda_library_error(error):
+            MODEL_CACHE.pop(cache_key, None)
+            fallback_model = WhisperModel(cache_key, device="cpu", compute_type="int8")
+            MODEL_CACHE[cache_key] = fallback_model
+            segments, _info = fallback_model.transcribe(
+                audio_path,
+                language=language,
+                vad_filter=True,
+                beam_size=beam_size,
+                temperature=temperature,
+                condition_on_previous_text=True,
+                initial_prompt=initial_prompt,
+            )
+            return "".join(segment.text for segment in segments).strip(), "cpu-fallback"
+        raise error
 
 
 class WhisperHandler(BaseHTTPRequestHandler):
@@ -73,16 +129,30 @@ class WhisperHandler(BaseHTTPRequestHandler):
         audio_data = self.rfile.read(content_length)
         model_name = self.headers.get("X-Whisper-Model", os.environ.get("WHISPER_MODEL", "base"))
         language = self.headers.get("X-Whisper-Language", os.environ.get("WHISPER_LANGUAGE", "ko"))
+        beam_size = int(self.headers.get("X-Whisper-Beam-Size", os.environ.get("WHISPER_BEAM_SIZE", "5")))
+        temperature = float(self.headers.get("X-Whisper-Temperature", os.environ.get("WHISPER_TEMPERATURE", "0")))
+        initial_prompt = self.headers.get(
+            "X-Whisper-Initial-Prompt",
+            os.environ.get("WHISPER_INITIAL_PROMPT", "이 대화는 한국어 디스코드 음성 채팅이다. 단어를 자연스럽게 받아 적어라."),
+        )
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             temp_file.write(audio_data)
             temp_path = temp_file.name
 
         try:
-            model = get_model(model_name)
-            segments, _info = model.transcribe(temp_path, language=language, vad_filter=True)
-            text = "".join(segment.text for segment in segments).strip()
-            self._send_json(200, {"ok": True, "text": text})
+            text, fallback_mode = transcribe_with_fallback(
+                model_name,
+                temp_path,
+                language,
+                beam_size,
+                temperature,
+                initial_prompt,
+            )
+            response = {"ok": True, "text": text}
+            if fallback_mode:
+                response["fallback"] = fallback_mode
+            self._send_json(200, response)
         except Exception as error:
             self._send_json(500, {"ok": False, "error": str(error)})
         finally:
@@ -103,6 +173,21 @@ def main():
     parser.add_argument("--host", default=os.environ.get("WHISPER_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("WHISPER_PORT", "8787")))
     args = parser.parse_args()
+
+    print(
+        "Whisper config:",
+        {
+            "host": args.host,
+            "port": args.port,
+            "model": os.environ.get("WHISPER_MODEL", "base"),
+            "language": os.environ.get("WHISPER_LANGUAGE", "ko"),
+            "device": os.environ.get("WHISPER_DEVICE", "cpu"),
+            "compute_type": os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
+            "beam_size": os.environ.get("WHISPER_BEAM_SIZE", "5"),
+            "temperature": os.environ.get("WHISPER_TEMPERATURE", "0"),
+        },
+        flush=True,
+    )
 
     server = HTTPServer((args.host, args.port), WhisperHandler)
     print(f"Whisper server listening on http://{args.host}:{args.port}")
