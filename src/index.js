@@ -297,6 +297,16 @@ function getWakeWordPrefixLength(normalizedText) {
 function detectVoiceCommand(commandText) {
   if (!commandText) return null;
 
+  // Fast-path rules for common Korean ASR variants.
+  if (isTileDrawIntent(commandText)) {
+    return {
+      name: "패뽑기",
+      ambiguous: false,
+      topScore: 1,
+      secondScore: 0,
+    };
+  }
+
   const intents = [
     {
       name: "타패추천",
@@ -347,6 +357,17 @@ function detectVoiceCommand(commandText) {
     topScore: top.score,
     secondScore: second.score,
   };
+}
+
+function isTileDrawIntent(text) {
+  if (!text) return false;
+
+  if (/손패|손페/.test(text)) return true;
+  if (/패뽑기|패뽑|패복기|패폭기|패법기|폐뽑기|폐복기/.test(text)) return true;
+
+  const hasTileWord = /패|폐/.test(text);
+  const hasDrawWord = /뽑|뽑아|복|폭|법|나눠|줘|주라|뽑기/.test(text);
+  return hasTileWord && hasDrawWord;
 }
 
 function similarityScore(input, pattern) {
@@ -461,11 +482,6 @@ async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   if (!detected) return;
 
   if (detected.ambiguous) {
-    if (wakeWordMatched) {
-      await outputChannel.send({
-        content: `🎤 <@${userId}> 명령이 애매하다냥. ${detected.candidates.join(" / ")} 중 하나로 짧게 다시 말해달라냥!`,
-      }).catch(() => null);
-    }
     return;
   }
 
@@ -678,31 +694,17 @@ async function startVoiceSession(interaction) {
 
     try {
       const outputChannel = await interaction.guild.channels.fetch(session.outputChannelId).catch(() => null);
-      if (outputChannel && outputChannel.isTextBased()) {
-        const memberTag = interaction.guild.members.cache.get(userId)?.user?.tag || userId;
-        await outputChannel.send({ content: `🎙️ ${memberTag} 말하는 중... 인식 시작한다냥.` });
-      }
 
       const opusStream = connection.receiver.subscribe(userId, {
         end: { behavior: EndBehaviorType.AfterSilence, duration: voiceAfterSilenceMs },
       });
       const text = await transcribeUserSpeech(interaction.guild, userId, session.outputChannelId, opusStream);
 
-      if (outputChannel && outputChannel.isTextBased()) {
-        const memberTag = interaction.guild.members.cache.get(userId)?.user?.tag || userId;
-        if (!text) {
-          await outputChannel.send({ content: `🗣️ ${memberTag} 말은 들었는데 인식 결과가 비어 있다냥.` });
-        } else {
-          await outputChannel.send({ content: `🗣️ ${memberTag}: ${text}` });
-          await maybeHandleVoiceCommand(interaction.guild, outputChannel, userId, text);
-        }
+      if (outputChannel && outputChannel.isTextBased() && text) {
+        await maybeHandleVoiceCommand(interaction.guild, outputChannel, userId, text);
       }
     } catch (error) {
       console.error("Voice transcription failed:", error);
-      const outputChannel = await interaction.guild.channels.fetch(session.outputChannelId).catch(() => null);
-      if (outputChannel && outputChannel.isTextBased()) {
-        await outputChannel.send({ content: `⚠️ 음성 인식 실패했다냥: ${error.message || error}` }).catch(() => null);
-      }
     } finally {
       session.activeUsers.delete(userId);
     }
