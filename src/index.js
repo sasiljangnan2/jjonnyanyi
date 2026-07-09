@@ -545,13 +545,13 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.commandName === "패뽑기") {
     const tileTypes = [
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, suit: 0, num: i + 1 })),
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, suit: 1, num: i + 1 })),
-      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, suit: 2, num: i + 1 })),
-      { label: "동", suit: 3, num: 1 }, { label: "남", suit: 3, num: 2 },
-      { label: "서", suit: 3, num: 3 }, { label: "북", suit: 3, num: 4 },
-      { label: "백", suit: 3, num: 5 }, { label: "발", suit: 3, num: 6 },
-      { label: "중", suit: 3, num: 7 },
+      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, emoji: `${i + 1}m`, suit: 0, num: i + 1 })),
+      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, emoji: `${i + 1}p`, suit: 1, num: i + 1 })),
+      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, emoji: `${i + 1}s`, suit: 2, num: i + 1 })),
+      { label: "동", emoji: "1z", suit: 3, num: 1 }, { label: "남", emoji: "2z", suit: 3, num: 2 },
+      { label: "서", emoji: "3z", suit: 3, num: 3 }, { label: "북", emoji: "4z", suit: 3, num: 4 },
+      { label: "백", emoji: "5z", suit: 3, num: 5 }, { label: "발", emoji: "6z", suit: 3, num: 6 },
+      { label: "중", emoji: "7z", suit: 3, num: 7 },
     ];
     // 각 패 4장씩 136장 덱 생성
     const deck = tileTypes.flatMap((t) => [t, t, t, t]);
@@ -563,8 +563,18 @@ client.on("interactionCreate", async (interaction) => {
     const hand = deck.slice(0, 13);
     // 만→통→삭→자패, 숫자 오름차순 정렬
     hand.sort((a, b) => a.suit - b.suit || a.num - b.num);
-    const handStr = hand.map((t) => t.label).join(" ");
-    await interaction.reply({ content: `🀄 뽑은 손패다냥!\n**${handStr}**\n어떤 역을 노릴지는 네 자유다냥~` });
+
+    // 서버 커스텀 이모지 가져오기
+    let emojiMap = new Map();
+    if (interaction.guild) {
+      const guildEmojis = await interaction.guild.emojis.fetch().catch(() => null);
+      if (guildEmojis) {
+        guildEmojis.forEach((e) => emojiMap.set(e.name, `<:${e.name}:${e.id}>`));
+      }
+    }
+
+    const handStr = hand.map((t) => emojiMap.get(t.emoji) || t.label).join("");
+    await interaction.reply({ content: `🀄 뽑은 손패다냥!\n${handStr}\n어떤 역을 노릴지는 네 자유다냥~` });
     return;
   }
 
