@@ -579,14 +579,27 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   if (interaction.commandName === "타패추천") {
-    const tiles = [
-      "1만", "2만", "3만", "4만", "5만", "6만", "7만", "8만", "9만",
-      "1통", "2통", "3통", "4통", "5통", "6통", "7통", "8통", "9통",
-      "1삭", "2삭", "3삭", "4삭", "5삭", "6삭", "7삭", "8삭", "9삭",
-      "동", "남", "서", "북", "백", "발", "중"
+    const tileTypes = [
+      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}만`, emoji: `${i + 1}m` })),
+      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}통`, emoji: `${i + 1}p` })),
+      ...Array.from({ length: 9 }, (_, i) => ({ label: `${i + 1}삭`, emoji: `${i + 1}s` })),
+      { label: "동", emoji: "1z" }, { label: "남", emoji: "2z" },
+      { label: "서", emoji: "3z" }, { label: "북", emoji: "4z" },
+      { label: "백", emoji: "5z" }, { label: "발", emoji: "6z" },
+      { label: "중", emoji: "7z" },
     ];
-    const dropTile = tiles[Math.floor(Math.random() * tiles.length)];
-    await interaction.reply({ content: `🀄 이번엔 **${dropTile}** (을)를 버려라냥! 책임은 안 진다냥~` });
+
+    let emojiMap = new Map();
+    if (interaction.guild) {
+      const guildEmojis = await interaction.guild.emojis.fetch().catch(() => null);
+      if (guildEmojis) {
+        guildEmojis.forEach((e) => emojiMap.set(e.name, `<:${e.name}:${e.id}>`));
+      }
+    }
+
+    const dropTile = tileTypes[Math.floor(Math.random() * tileTypes.length)];
+    const tileDisplay = emojiMap.get(dropTile.emoji) || dropTile.label;
+    await interaction.reply({ content: `🀄 이번엔 **${tileDisplay}**를 버려라냥! 책임은 안 진다냥~` });
     return;
   }
 
