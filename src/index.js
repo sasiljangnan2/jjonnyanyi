@@ -4,6 +4,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const cron = require("node-cron");
+const prism = require("prism-media");
 
 const {
   Client,
@@ -12,6 +13,13 @@ const {
   Routes,
   SlashCommandBuilder,
 } = require("discord.js");
+
+const {
+  joinVoiceChannel,
+  entersState,
+  VoiceConnectionStatus,
+  EndBehaviorType,
+} = require("@discordjs/voice");
 
 const token = (process.env.DISCORD_TOKEN || "").trim();
 const clientId = (process.env.DISCORD_CLIENT_ID || "").trim();
@@ -28,6 +36,14 @@ const rouletteDailyLimit = Number(process.env.ROULETTE_DAILY_LIMIT || 3);
 const rouletteRemovalTimers = new Map();
 const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
 const loseRoleRemovalDelayMs = Number(process.env.LOSE_ROLE_REMOVAL_DELAY_MS || rouletteRoleRemovalDelayMs);
+const whisperApiUrl = (process.env.WHISPER_API_URL || "").trim();
+const whisperApiKey = (process.env.WHISPER_API_KEY || "").trim();
+const whisperModelName = (process.env.WHISPER_MODEL || "base").trim();
+const whisperLanguage = (process.env.WHISPER_LANGUAGE || "ko").trim();
+const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
+const voiceSessions = new Map();
+
+fs.mkdirSync(voiceTempDir, { recursive: true });
 
 if (!token) {
   console.error("DISCORD_TOKEN is missing. Add it to your .env file.");
@@ -45,7 +61,7 @@ if (!guildId) {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildVoiceStates],
 });
 
 const port = Number(process.env.PORT || 3000);
@@ -104,7 +120,180 @@ const commands = [
     .setName("패뽑기")
     .setDescription("랜덤으로 13장 손패를 뽑아준다냥!")
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("음성입장")
+    .setDescription("내 음성채팅에 들어와서 듣기 시작한다냥!")
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("음성퇴장")
+    .setDescription("음성채팅 듣기를 멈추고 나간다냥!")
+    .toJSON(),
 ];
+
+function buildWavHeader(pcmDataLength, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
+  const blockAlign = channels * (bitsPerSample / 8);
+  const byteRate = sampleRate * blockAlign;
+  const buffer = Buffer.alloc(44);
+
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + pcmDataLength, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(pcmDataLength, 40);
+
+  return buffer;
+}
+
+async function transcribeAudioFile(audioPath) {
+  const audioBuffer = await fs.promises.readFile(audioPath);
+
+  if (whisperApiUrl) {
+    const response = await fetch(whisperApiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "audio/wav",
+        ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
+        "X-Whisper-Model": whisperModelName,
+        "X-Whisper-Language": whisperLanguage,
+      },
+      body: audioBuffer,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(errorText || `Whisper API returned ${response.status}`);
+    }
+
+    const parsed = await response.json();
+    return (parsed.text || "").trim();
+  }
+
+  throw new Error("WHISPER_API_URL is missing. Start the local Whisper server and set WHISPER_API_URL in Railway.");
+}
+
+async function transcribeUserSpeech(guild, userId, outputChannelId, opusStream) {
+  const decoder = new prism.opus.Decoder({ rate: 16000, channels: 1, frameSize: 960 });
+  const pcmChunks = [];
+
+  return new Promise((resolve, reject) => {
+    opusStream.pipe(decoder);
+
+    opusStream.on("error", reject);
+    decoder.on("error", reject);
+    decoder.on("data", (chunk) => {
+      pcmChunks.push(chunk);
+    });
+
+    decoder.on("end", async () => {
+      try {
+        const pcmBuffer = Buffer.concat(pcmChunks);
+        if (pcmBuffer.length === 0) {
+          resolve("");
+          return;
+        }
+
+        const fileName = `${guild.id}-${userId}-${Date.now()}.wav`;
+        const audioPath = path.join(voiceTempDir, fileName);
+        await fs.promises.writeFile(audioPath, Buffer.concat([buildWavHeader(pcmBuffer.length), pcmBuffer]));
+
+        const text = await transcribeAudioFile(audioPath);
+        await fs.promises.unlink(audioPath).catch(() => null);
+        resolve(text);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+async function cleanupVoiceSession(guildId) {
+  const session = voiceSessions.get(guildId);
+  if (!session) return;
+
+  try {
+    session.connection.destroy();
+  } catch (error) {
+    console.error("Failed to destroy voice connection:", error);
+  }
+
+  voiceSessions.delete(guildId);
+}
+
+async function startVoiceSession(interaction) {
+  if (!interaction.guild) {
+    return { ok: false, message: "서버에서만 쓸 수 있다냥." };
+  }
+
+  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const voiceChannel = member?.voice?.channel;
+  if (!voiceChannel) {
+    return { ok: false, message: "음성채팅에 먼저 들어가 있어야 한다냥." };
+  }
+
+  await cleanupVoiceSession(interaction.guild.id);
+
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: interaction.guild.id,
+    adapterCreator: interaction.guild.voiceAdapterCreator,
+    selfDeaf: false,
+    selfMute: true,
+  });
+
+  await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+
+  const session = {
+    connection,
+    outputChannelId: interaction.channelId,
+    guildId: interaction.guild.id,
+    activeUsers: new Set(),
+  };
+
+  voiceSessions.set(interaction.guild.id, session);
+
+  connection.receiver.speaking.on("start", async (userId) => {
+    if (session.activeUsers.has(userId)) return;
+    if (userId === client.user.id) return;
+    session.activeUsers.add(userId);
+
+    try {
+      const opusStream = connection.receiver.subscribe(userId, {
+        end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
+      });
+      const text = await transcribeUserSpeech(interaction.guild, userId, session.outputChannelId, opusStream);
+      if (!text) return;
+
+      const outputChannel = await interaction.guild.channels.fetch(session.outputChannelId).catch(() => null);
+      if (outputChannel && outputChannel.isTextBased()) {
+        const memberTag = interaction.guild.members.cache.get(userId)?.user?.tag || userId;
+        await outputChannel.send({ content: `🗣️ ${memberTag}: ${text}` });
+      }
+    } catch (error) {
+      console.error("Voice transcription failed:", error);
+    } finally {
+      session.activeUsers.delete(userId);
+    }
+  });
+
+  connection.on("stateChange", (_, newState) => {
+    if (
+      newState.status === VoiceConnectionStatus.Disconnected ||
+      newState.status === VoiceConnectionStatus.Destroyed
+    ) {
+      cleanupVoiceSession(interaction.guild.id).catch(() => null);
+    }
+  });
+
+  return { ok: true, message: `음성채팅 ${voiceChannel.name}에 들어가서 듣기 시작했다냥.` };
+}
 
 async function sendStickerByNameToChannel(guild, channelId, stickerName) {
   const channel = await guild.channels.fetch(channelId).catch(() => null);
@@ -483,6 +672,30 @@ client.on("interactionCreate", async (interaction) => {
       } else {
         await interaction.reply({ content: "테스트 중 문제 생겼다냥.", flags: 64 });
       }
+    }
+    return;
+  }
+
+  if (interaction.commandName === "음성입장") {
+    try {
+      const result = await startVoiceSession(interaction);
+      await interaction.reply({ content: result.message, flags: 64 });
+    } catch (error) {
+      console.error("음성입장 명령어 실행 중 오류:", error);
+      await interaction.reply({ content: "음성채팅에 들어가는 중 문제가 생겼다냥.", flags: 64 });
+    }
+    return;
+  }
+
+  if (interaction.commandName === "음성퇴장") {
+    try {
+      if (interaction.guild) {
+        await cleanupVoiceSession(interaction.guild.id);
+      }
+      await interaction.reply({ content: "음성채팅 듣기를 멈추고 나왔다냥.", flags: 64 });
+    } catch (error) {
+      console.error("음성퇴장 명령어 실행 중 오류:", error);
+      await interaction.reply({ content: "음성채팅에서 나오는 중 문제가 생겼다냥.", flags: 64 });
     }
     return;
   }
