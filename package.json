@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "whisper-server": "python scripts/whisper_server.py"
+    "whisper-server": "python scripts/whisper_server.py",
+    "whisper-ngrok": "start_whisper_ngrok.bat"
   },
   "keywords": [
     "discord",
