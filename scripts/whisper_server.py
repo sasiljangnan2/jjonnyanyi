@@ -57,7 +57,7 @@ def get_model(model_name: str):
     return MODEL_CACHE[cache_key]
 
 
-def transcribe_with_fallback(model_name: str, audio_path: str, language: str, beam_size: int, temperature: float, initial_prompt: str):
+def transcribe_with_fallback(model_name: str, audio_path: str, language: str, beam_size: int, temperature: float, initial_prompt: str, hotwords: str):
     cache_key = model_name.strip() or "base"
     preferred_device = os.environ.get("WHISPER_DEVICE", "cpu").strip() or "cpu"
     preferred_compute_type = os.environ.get("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
@@ -82,6 +82,9 @@ def transcribe_with_fallback(model_name: str, audio_path: str, language: str, be
             "speech_pad_ms": vad_speech_pad_ms,
         },
     }
+
+    if hotwords:
+        decode_kwargs["hotwords"] = hotwords
 
     try:
         model = get_model(model_name)
@@ -159,6 +162,7 @@ class WhisperHandler(BaseHTTPRequestHandler):
             "X-Whisper-Initial-Prompt",
             os.environ.get("WHISPER_INITIAL_PROMPT", "이 대화는 한국어 디스코드 음성 채팅이다. 단어를 자연스럽게 받아 적어라."),
         )
+        hotwords = self.headers.get("X-Whisper-Hotwords", os.environ.get("WHISPER_HOTWORDS", "")).strip()
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
             temp_file.write(audio_data)
@@ -172,6 +176,7 @@ class WhisperHandler(BaseHTTPRequestHandler):
                 beam_size,
                 temperature,
                 initial_prompt,
+                hotwords,
             )
             response = {"ok": True, "text": text}
             if fallback_mode:
@@ -209,6 +214,7 @@ def main():
             "compute_type": os.environ.get("WHISPER_COMPUTE_TYPE", "int8"),
             "beam_size": os.environ.get("WHISPER_BEAM_SIZE", "5"),
             "temperature": os.environ.get("WHISPER_TEMPERATURE", "0"),
+            "hotwords": os.environ.get("WHISPER_HOTWORDS", ""),
             "best_of": os.environ.get("WHISPER_BEST_OF", "5"),
             "patience": os.environ.get("WHISPER_PATIENCE", "1.2"),
             "condition_on_previous_text": os.environ.get("WHISPER_CONDITION_ON_PREVIOUS_TEXT", "false"),

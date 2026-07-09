@@ -43,8 +43,15 @@ const whisperLanguage = (process.env.WHISPER_LANGUAGE || "ko").trim();
 const whisperBeamSize = Number(process.env.WHISPER_BEAM_SIZE || 5);
 const whisperTemperature = Number(process.env.WHISPER_TEMPERATURE || 0);
 const whisperInitialPrompt = (process.env.WHISPER_INITIAL_PROMPT || "").trim();
+const whisperHotwords = (process.env.WHISPER_HOTWORDS || "").trim();
 const voiceAfterSilenceMs = Number(process.env.VOICE_AFTER_SILENCE_MS || 1500);
 const voiceWakeWord = (process.env.VOICE_WAKE_WORD || "쫀냥아").trim();
+const voiceWakeWordAliases = (process.env.VOICE_WAKE_WORD_ALIASES || "")
+  .split(",")
+  .map((v) => v.trim())
+  .filter(Boolean);
+const voiceAllowCommandWithoutWakeWord = (process.env.VOICE_ALLOW_COMMAND_WITHOUT_WAKE_WORD || "true").trim().toLowerCase() === "true";
+const voiceNoWakeMaxLength = Number(process.env.VOICE_NO_WAKE_MAX_LENGTH || 14);
 const voiceCommandCooldownMs = Number(process.env.VOICE_COMMAND_COOLDOWN_MS || 3000);
 const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
 const voiceSessions = new Map();
@@ -205,7 +212,101 @@ const yakuRecommendationList = [
 ];
 
 function normalizeVoiceText(text) {
-  return String(text || "").replace(/\s+/g, "").toLowerCase();
+  return normalizeKoreanTenseConsonants(String(text || ""))
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[^0-9a-z가-힣]/g, "");
+}
+
+function normalizeKoreanTenseConsonants(text) {
+  const CHO_TENSE_TO_LAX = new Map([[1, 0], [4, 3], [8, 7], [10, 9], [13, 12]]);
+  const JONG_TENSE_TO_LAX = new Map([[2, 1], [20, 19]]);
+
+  let output = "";
+
+  for (const ch of String(text || "")) {
+    const code = ch.charCodeAt(0);
+    if (code < 0xac00 || code > 0xd7a3) {
+      output += ch;
+      continue;
+    }
+
+    const offset = code - 0xac00;
+    let cho = Math.floor(offset / 588);
+    const jung = Math.floor((offset % 588) / 28);
+    let jong = offset % 28;
+
+    cho = CHO_TENSE_TO_LAX.get(cho) ?? cho;
+    jong = JONG_TENSE_TO_LAX.get(jong) ?? jong;
+
+    const normalizedCode = 0xac00 + cho * 588 + jung * 28 + jong;
+    output += String.fromCharCode(normalizedCode);
+  }
+
+  return output;
+}
+
+function boundedEditDistance(a, b, maxDistance = 1) {
+  if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const dp = Array.from({ length: rows }, () => new Array(cols).fill(0));
+
+  for (let i = 0; i < rows; i++) dp[i][0] = i;
+  for (let j = 0; j < cols; j++) dp[0][j] = j;
+
+  for (let i = 1; i < rows; i++) {
+    let rowMin = Number.POSITIVE_INFINITY;
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost,
+      );
+      if (dp[i][j] < rowMin) rowMin = dp[i][j];
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+  }
+
+  return dp[a.length][b.length];
+}
+
+function getWakeWordPrefixLength(normalizedText) {
+  const defaultAliases = ["쫀냥아", "쫀양아", "존냥아", "조냥아", "쪼냥아", "쫀냥", "쫀냐", "쫀냐아"];
+  const aliases = [...new Set([voiceWakeWord, ...voiceWakeWordAliases, ...defaultAliases].map(normalizeVoiceText).filter(Boolean))];
+
+  for (const alias of aliases) {
+    if (normalizedText.startsWith(alias)) {
+      return alias.length;
+    }
+
+    const head = normalizedText.slice(0, alias.length);
+    if (head.length === alias.length && boundedEditDistance(head, alias, 1) <= 1) {
+      return alias.length;
+    }
+  }
+
+  return 0;
+}
+
+function detectVoiceCommand(commandText) {
+  if (!commandText) return null;
+
+  if (/타패추천|타패추전|타패|버릴패|버릴페|버려패|버릴거/.test(commandText)) {
+    return "타패추천";
+  }
+
+  if (/패뽑기|패뽑|패폭기|패복기|손패|손페/.test(commandText)) {
+    return "패뽑기";
+  }
+
+  if (/역조합|역추천|약조합|역조합추천/.test(commandText)) {
+    return "역조합";
+  }
+
+  return null;
 }
 
 async function fetchGuildEmojiMap(guild) {
@@ -251,17 +352,26 @@ function buildRandomYakuMessage() {
 
 async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   const normalized = normalizeVoiceText(text);
-  const wakeWord = normalizeVoiceText(voiceWakeWord);
-  if (!normalized.startsWith(wakeWord)) {
+  if (!normalized) return;
+
+  const wakeWordLength = getWakeWordPrefixLength(normalized);
+  const wakeWordMatched = wakeWordLength > 0;
+
+  if (!wakeWordMatched && !voiceAllowCommandWithoutWakeWord) {
     return;
   }
 
-  const commandText = normalized.slice(wakeWord.length);
-  if (!commandText) {
+  const trimmed = (wakeWordMatched ? normalized.slice(wakeWordLength) : normalized).replace(/^(야|아)+/, "");
+  if (!trimmed) return;
+
+  if (!wakeWordMatched && trimmed.length > voiceNoWakeMaxLength) {
     return;
   }
 
-  const dedupeKey = `${guild.id}:${userId}:${commandText}`;
+  const detectedCommand = detectVoiceCommand(trimmed);
+  if (!detectedCommand) return;
+
+  const dedupeKey = `${guild.id}:${userId}:${detectedCommand}`;
   const now = Date.now();
   const lastUsedAt = recentVoiceCommands.get(dedupeKey) || 0;
   if (now - lastUsedAt < voiceCommandCooldownMs) {
@@ -271,19 +381,19 @@ async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
 
   const mention = `<@${userId}>`;
 
-  if (/타패추천|타패|버릴패/.test(commandText)) {
+  if (detectedCommand === "타패추천") {
     const message = await buildRandomTileRecommendation(guild);
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 타패추천\n${message}` });
     return;
   }
 
-  if (/패뽑기|패뽑|손패/.test(commandText)) {
+  if (detectedCommand === "패뽑기") {
     const message = await buildRandomHandMessage(guild);
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 패뽑기\n${message}` });
     return;
   }
 
-  if (/역조합|역추천/.test(commandText)) {
+  if (detectedCommand === "역조합") {
     const message = buildRandomYakuMessage();
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 역조합\n${message}` });
   }
@@ -325,6 +435,7 @@ async function transcribeAudioFile(audioPath) {
         "X-Whisper-Beam-Size": String(whisperBeamSize),
         "X-Whisper-Temperature": String(whisperTemperature),
         ...(whisperInitialPrompt ? { "X-Whisper-Initial-Prompt": whisperInitialPrompt } : {}),
+        ...(whisperHotwords ? { "X-Whisper-Hotwords": whisperHotwords } : {}),
       },
       body: audioBuffer,
     });
