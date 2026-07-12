@@ -1,5 +1,5 @@
 # 쫀냥이
-readme.md 공사중
+![쫀냥이](./sdf_cop2y.png)
 
 ## Whisper + ngrok 한번에 실행 (Windows)
 
