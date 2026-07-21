@@ -134,7 +134,7 @@ const commands = [
     .setDescription("룰렛권을 써서 5% 확률로 대상의 당첨 권한을 없앤다냥")
     .addUserOption((option) =>
       option
-        .setName("유저")
+        .setName("대상")
         .setDescription("당첨 권한을 제거할 대상을 골라라냥")
         .setRequired(true)
     )
