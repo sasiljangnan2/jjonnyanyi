@@ -227,6 +227,10 @@ const yakuRecommendationList = [
   { name: "순정구련보등", han: "더블 역만", desc: "구련보등 9면 대기냥!! 이런 손패가 실제로 온다고?냥!!" },
 ];
 
+const yakumanRecommendationChance = 0.25;
+const yakumanRecommendations = yakuRecommendationList.filter((yaku) => yaku.han.includes("역만"));
+const regularYakuRecommendations = yakuRecommendationList.filter((yaku) => !yaku.han.includes("역만"));
+
 function normalizeVoiceText(text) {
   return normalizeKoreanTenseConsonants(String(text || ""))
     .toLowerCase()
@@ -465,7 +469,10 @@ async function buildRandomHandMessage(guild) {
 }
 
 function buildRandomYakuMessage() {
-  const yaku = yakuRecommendationList[Math.floor(Math.random() * yakuRecommendationList.length)];
+  const recommendationPool = Math.random() < yakumanRecommendationChance
+    ? yakumanRecommendations
+    : regularYakuRecommendations;
+  const yaku = recommendationPool[Math.floor(Math.random() * recommendationPool.length)];
   return `🀄 오늘의 역은 **${yaku.name}** (${yaku.han})이다냥!\n${yaku.desc}`;
 }
 
