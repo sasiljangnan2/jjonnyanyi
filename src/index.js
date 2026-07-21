@@ -227,7 +227,7 @@ const yakuRecommendationList = [
   { name: "순정구련보등", han: "더블 역만", desc: "구련보등 9면 대기냥!! 이런 손패가 실제로 온다고?냥!!" },
 ];
 
-const yakumanRecommendationChance = 0.25;
+const yakumanRecommendationChance = 0.15;
 const yakumanRecommendations = yakuRecommendationList.filter((yaku) => yaku.han.includes("역만"));
 const regularYakuRecommendations = yakuRecommendationList.filter((yaku) => !yaku.han.includes("역만"));
 
