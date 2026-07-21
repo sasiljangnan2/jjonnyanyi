@@ -33,7 +33,6 @@ const loseRoleId = (process.env.LOSE_ROLE_ID || "").trim();
 const loseRoleChancePercent = Number(process.env.LOSE_ROLE_CHANCE_PERCENT || 10);
 const rouletteUsagePath = path.join(__dirname, "..", "roulette_usage.json");
 const rouletteDailyLimit = Number(process.env.ROULETTE_DAILY_LIMIT || 3);
-const removeWinningRoleChancePercent = 5;
 const rouletteRemovalTimers = new Map();
 const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
 const loseRoleRemovalDelayMs = Number(process.env.LOSE_ROLE_REMOVAL_DELAY_MS || rouletteRoleRemovalDelayMs);
@@ -131,7 +130,7 @@ const commands = [
     .toJSON(),
   new SlashCommandBuilder()
     .setName("나가")
-    .setDescription("룰렛권을 써서 5% 확률로 대상의 당첨 권한을 없앤다냥")
+    .setDescription("룰렛 당첨 확률로 대상의 당첨 권한을 없앤다냥")
     .addUserOption((option) =>
       option
         .setName("대상")
@@ -1266,7 +1265,7 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    if (Math.random() * 100 >= removeWinningRoleChancePercent) {
+    if (Math.random() * 100 >= randomRoleChancePercent) {
       await interaction.reply({
         content: `${interaction.user}가 ${targetUser}을 내보내려 했지만 실패했다냥! 당첨 권한은 그대로다냥.`,
       });
