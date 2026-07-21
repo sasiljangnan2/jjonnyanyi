@@ -130,18 +130,13 @@ const commands = [
     )
     .toJSON(),
   new SlashCommandBuilder()
-    .setName("대상")
-    .setDescription("대상을 상대로 장난친다냥")
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName("나가")
-        .setDescription("룰렛권을 써서 5% 확률로 대상의 당첨 권한을 없앤다냥")
-        .addUserOption((option) =>
-          option
-            .setName("유저")
-            .setDescription("당첨 확률을 낮출 대상을 골라라냥")
-            .setRequired(true)
-        )
+    .setName("나가")
+    .setDescription("룰렛권을 써서 5% 확률로 대상의 당첨 권한을 없앤다냥")
+    .addUserOption((option) =>
+      option
+        .setName("유저")
+        .setDescription("당첨 권한을 제거할 대상을 골라라냥")
+        .setRequired(true)
     )
     .toJSON(),
   new SlashCommandBuilder()
@@ -1065,7 +1060,7 @@ async function registerCommands() {
   await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     body: commands,
   });
-  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트, /룰렛, /룰렛초기화, /대상 나가`);
+  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트, /룰렛, /룰렛초기화, /나가`);
 }
 
 client.once("ready", async () => {
@@ -1228,8 +1223,8 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
-  if (interaction.commandName === "대상" && interaction.options.getSubcommand() === "나가") {
-    const targetUser = interaction.options.getUser("유저");
+  if (interaction.commandName === "나가") {
+    const targetUser = interaction.options.getUser("대상");
 
     if (!targetUser) {
       await interaction.reply({ content: "❌ 대상을 못 찾았다냥.", flags: 64 });
@@ -1276,9 +1271,9 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     try {
-      await targetMember.roles.remove(winningRole.id, `${interaction.user.tag}의 /대상 나가 성공`);
+      await targetMember.roles.remove(winningRole.id, `${interaction.user.tag}의 /나가 성공`);
     } catch (error) {
-      console.error("Failed to remove winning role with /대상 나가:", error);
+      console.error("Failed to remove winning role with /나가:", error);
       await interaction.reply({
         content: `❌ 추첨에는 성공했지만 권한 제거 중 문제가 생겼다냥. 룰렛권은 사용됐다냥.`,
         flags: 64,
