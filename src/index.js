@@ -33,6 +33,7 @@ const loseRoleId = (process.env.LOSE_ROLE_ID || "").trim();
 const loseRoleChancePercent = Number(process.env.LOSE_ROLE_CHANCE_PERCENT || 10);
 const rouletteUsagePath = path.join(__dirname, "..", "roulette_usage.json");
 const rouletteDailyLimit = Number(process.env.ROULETTE_DAILY_LIMIT || 3);
+const removeWinningRoleChancePercent = 5;
 const rouletteRemovalTimers = new Map();
 const rouletteRoleRemovalDelayMs = Number(process.env.ROULETTE_ROLE_REMOVAL_DELAY_MS || 5 * 60 * 1000);
 const loseRoleRemovalDelayMs = Number(process.env.LOSE_ROLE_REMOVAL_DELAY_MS || rouletteRoleRemovalDelayMs);
@@ -126,6 +127,21 @@ const commands = [
         .setName("대상")
         .setDescription("초기화할 대상을 골라라냥")
         .setRequired(true)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("대상")
+    .setDescription("대상을 상대로 장난친다냥")
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("나가")
+        .setDescription("룰렛권을 써서 5% 확률로 대상의 당첨 권한을 없앤다냥")
+        .addUserOption((option) =>
+          option
+            .setName("유저")
+            .setDescription("당첨 확률을 낮출 대상을 골라라냥")
+            .setRequired(true)
+        )
     )
     .toJSON(),
   new SlashCommandBuilder()
@@ -1049,7 +1065,7 @@ async function registerCommands() {
   await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
     body: commands,
   });
-  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트, /룰렛, /룰렛초기화`);
+  console.log(`Registered commands for guild ${guildId}: /안녕, /2시, /2시테스트, /룰렛, /룰렛초기화, /대상 나가`);
 }
 
 client.once("ready", async () => {
@@ -1209,6 +1225,70 @@ client.on("interactionCreate", async (interaction) => {
       scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, result.grantedRoleId, result.removalDelayMs);
     }
 
+    return;
+  }
+
+  if (interaction.commandName === "대상" && interaction.options.getSubcommand() === "나가") {
+    const targetUser = interaction.options.getUser("유저");
+
+    if (!targetUser) {
+      await interaction.reply({ content: "❌ 대상을 못 찾았다냥.", flags: 64 });
+      return;
+    }
+
+    if (targetUser.id === interaction.user.id) {
+      await interaction.reply({ content: "❌ 자기 자신한테는 쓸 수 없다냥.", flags: 64 });
+      return;
+    }
+
+    if (targetUser.bot) {
+      await interaction.reply({ content: "❌ 봇한테는 쓸 수 없다냥.", flags: 64 });
+      return;
+    }
+
+    const targetMember = await interaction.guild?.members.fetch(targetUser.id).catch(() => null);
+    if (!targetMember || !randomRoleId || !targetMember.roles.cache.has(randomRoleId)) {
+      await interaction.reply({ content: "❌ 현재 당첨 권한이 있는 사람만 대상으로 지정할 수 있다냥.", flags: 64 });
+      return;
+    }
+
+    const winningRole = await interaction.guild.roles.fetch(randomRoleId).catch(() => null);
+    const botMember = interaction.guild.members.me;
+    if (!winningRole || !botMember?.permissions.has("ManageRoles") || !winningRole.editable) {
+      await interaction.reply({ content: "❌ 지금은 당첨 권한을 제거할 수 없는 상태다냥. 봇 권한과 역할 순서를 확인해라냥.", flags: 64 });
+      return;
+    }
+
+    const quota = consumeRouletteQuota(interaction.user.id);
+    if (!quota.allowed) {
+      await interaction.reply({
+        content: `❌ 오늘 쓸 룰렛권이 없다냥. 하루에 ${rouletteDailyLimit}장까지다냥.`,
+        flags: 64,
+      });
+      return;
+    }
+
+    if (Math.random() * 100 >= removeWinningRoleChancePercent) {
+      await interaction.reply({
+        content: `${interaction.user}가 ${targetUser}을 내보내려 했지만 실패했다냥! 당첨 권한은 그대로다냥.`,
+      });
+      return;
+    }
+
+    try {
+      await targetMember.roles.remove(winningRole.id, `${interaction.user.tag}의 /대상 나가 성공`);
+    } catch (error) {
+      console.error("Failed to remove winning role with /대상 나가:", error);
+      await interaction.reply({
+        content: `❌ 추첨에는 성공했지만 권한 제거 중 문제가 생겼다냥. 룰렛권은 사용됐다냥.`,
+        flags: 64,
+      });
+      return;
+    }
+
+    await interaction.reply({
+      content: `🎯 ${interaction.user}의 공격이 성공했다냥! ${targetUser}의 당첨 권한을 없앴다냥!`,
+    });
     return;
   }
 
