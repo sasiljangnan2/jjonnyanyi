@@ -1254,7 +1254,10 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    const quota = consumeRouletteQuota(interaction.user.id);
+    const isAdmin = isAdminInteraction(interaction);
+    const quota = isAdmin
+      ? { allowed: true, remaining: null }
+      : consumeRouletteQuota(interaction.user.id);
     if (!quota.allowed) {
       await interaction.reply({
         content: `❌ 오늘 쓸 룰렛권이 없다냥. 하루에 ${rouletteDailyLimit}장까지다냥.`,
@@ -1275,7 +1278,9 @@ client.on("interactionCreate", async (interaction) => {
     } catch (error) {
       console.error("Failed to remove winning role with /나가:", error);
       await interaction.reply({
-        content: `❌ 추첨에는 성공했지만 권한 제거 중 문제가 생겼다냥. 룰렛권은 사용됐다냥.`,
+        content: isAdmin
+          ? "❌ 추첨에는 성공했지만 권한 제거 중 문제가 생겼다냥. 관리자는 룰렛권 제한이 없다냥."
+          : "❌ 추첨에는 성공했지만 권한 제거 중 문제가 생겼다냥. 룰렛권은 사용됐다냥.",
         flags: 64,
       });
       return;
