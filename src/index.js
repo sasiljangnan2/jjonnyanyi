@@ -19,6 +19,10 @@ const {
   entersState,
   VoiceConnectionStatus,
   EndBehaviorType,
+  createAudioPlayer,
+  createAudioResource,
+  AudioPlayerStatus,
+  NoSubscriberBehavior,
 } = require("@discordjs/voice");
 
 const token = (process.env.DISCORD_TOKEN || "").trim();
@@ -59,6 +63,16 @@ const voiceCommandCooldownMs = Number(process.env.VOICE_COMMAND_COOLDOWN_MS || 3
 const voiceIntentMinScore = Number(process.env.VOICE_INTENT_MIN_SCORE || 0.55);
 const voiceIntentAmbiguousGap = Number(process.env.VOICE_INTENT_AMBIGUOUS_GAP || 0.10);
 const voiceIntentDebug = (process.env.VOICE_INTENT_DEBUG || "false").trim().toLowerCase() === "true";
+const voiceConversationEnabled = (process.env.VOICE_CONVERSATION_ENABLED || "true").trim().toLowerCase() === "true";
+const voiceChatModel = (process.env.OLLAMA_MODEL || "qwen3:4b").trim();
+const voiceChatApiUrl = (process.env.VOICE_CHAT_API_URL
+  || whisperApiUrl.replace(/\/transcribe\/?$/, "/chat")).trim();
+const voiceTtsApiUrl = (process.env.VOICE_TTS_API_URL
+  || whisperApiUrl.replace(/\/transcribe\/?$/, "/tts")).trim();
+const voiceConversationHistoryTurns = Math.max(1, Number(process.env.VOICE_CONVERSATION_HISTORY_TURNS || 6));
+const voiceConversationMaxChars = Math.max(40, Number(process.env.VOICE_CONVERSATION_MAX_CHARS || 300));
+const voiceConversationSystemPrompt = (process.env.VOICE_CONVERSATION_SYSTEM_PROMPT
+  || "너는 디스코드 음성 채널의 고양이 캐릭터 쫀냥이다. 한국어로 자연스럽고 친근하게 답하고 문장 끝에 가끔 '냥'을 붙여라. 음성으로 들을 답변이므로 마크다운 없이 두세 문장 이내로 간결하게 답하라.").trim();
 const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
 const voiceSessions = new Map();
 const recentVoiceCommands = new Map();
@@ -480,29 +494,137 @@ function buildGreetingMessage() {
   return "<:ema:1463844904307261450> 냥! 쫀냥이 등장이다냥~";
 }
 
+async function requestVoiceConversationReply(session, userId, text) {
+  if (!voiceChatApiUrl) {
+    throw new Error("VOICE_CHAT_API_URL is missing.");
+  }
+
+  const previousHistory = session.conversationHistory.get(userId) || [];
+  const input = [
+    ...previousHistory,
+    { role: "user", content: text },
+  ];
+
+  const response = await fetch(voiceChatApiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
+    },
+    body: JSON.stringify({
+      model: voiceChatModel,
+      system: voiceConversationSystemPrompt,
+      messages: input,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `Voice chat API returned ${response.status}`);
+  }
+
+  const responseData = await response.json();
+  const reply = String(responseData?.text || "").slice(0, voiceConversationMaxChars).trim();
+  if (!reply) {
+    throw new Error("Voice chat API returned an empty reply.");
+  }
+
+  const historyLimit = voiceConversationHistoryTurns * 2;
+  session.conversationHistory.set(
+    userId,
+    [...input, { role: "assistant", content: reply }].slice(-historyLimit),
+  );
+  return reply;
+}
+
+async function createVoiceSpeechFile(text, guildId, userId) {
+  if (!voiceTtsApiUrl) {
+    throw new Error("VOICE_TTS_API_URL is missing.");
+  }
+
+  const response = await fetch(voiceTtsApiUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(whisperApiKey ? { "X-Whisper-Key": whisperApiKey } : {}),
+    },
+    body: JSON.stringify({
+      text,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(errorText || `Voice TTS API returned ${response.status}`);
+  }
+
+  const speechPath = path.join(voiceTempDir, `${guildId}-${userId}-${Date.now()}-reply.wav`);
+  await fs.promises.writeFile(speechPath, Buffer.from(await response.arrayBuffer()));
+  return speechPath;
+}
+
+async function playVoiceReply(session, userId, text) {
+  const speechPath = await createVoiceSpeechFile(text, session.guildId, userId);
+  session.isPlaying = true;
+
+  try {
+    const resource = createAudioResource(speechPath);
+    session.player.play(resource);
+    await entersState(session.player, AudioPlayerStatus.Playing, 15_000);
+    await entersState(session.player, AudioPlayerStatus.Idle, 90_000);
+  } finally {
+    session.isPlaying = false;
+    await fs.promises.unlink(speechPath).catch(() => null);
+  }
+}
+
+async function maybeHandleVoiceConversation(session, guild, outputChannel, userId, text) {
+  if (!voiceConversationEnabled || !voiceChatApiUrl || !voiceTtsApiUrl) return false;
+
+  const normalized = normalizeVoiceText(text);
+  const wakeWordLength = getWakeWordPrefixLength(normalized);
+  if (wakeWordLength <= 0) return false;
+  if (!normalized.slice(wakeWordLength).replace(/^(야|아)+/, "")) return false;
+
+  const conversationKey = `${guild.id}:${userId}`;
+  const now = Date.now();
+  const lastUsedAt = recentVoiceCommands.get(conversationKey) || 0;
+  if (now - lastUsedAt < voiceCommandCooldownMs) return false;
+  recentVoiceCommands.set(conversationKey, now);
+
+  const reply = await requestVoiceConversationReply(session, userId, text);
+  await outputChannel.send({ content: `💬 <@${userId}>: ${text}\n🐱 ${reply}` });
+
+  session.playbackQueue = session.playbackQueue
+    .catch(() => null)
+    .then(() => playVoiceReply(session, userId, reply));
+  await session.playbackQueue;
+  return true;
+}
+
 async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   const normalized = normalizeVoiceText(text);
-  if (!normalized) return;
+  if (!normalized) return false;
 
   const wakeWordLength = getWakeWordPrefixLength(normalized);
   const wakeWordMatched = wakeWordLength > 0;
 
   if (!wakeWordMatched && !voiceAllowCommandWithoutWakeWord) {
-    return;
+    return false;
   }
 
   const trimmed = (wakeWordMatched ? normalized.slice(wakeWordLength) : normalized).replace(/^(야|아)+/, "");
-  if (!trimmed) return;
+  if (!trimmed) return false;
 
   if (!wakeWordMatched && trimmed.length > voiceNoWakeMaxLength) {
-    return;
+    return false;
   }
 
   const detected = detectVoiceCommand(trimmed);
-  if (!detected) return;
+  if (!detected) return false;
 
   if (detected.ambiguous) {
-    return;
+    return false;
   }
 
   const detectedCommand = detected.name;
@@ -511,7 +633,7 @@ async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   const now = Date.now();
   const lastUsedAt = recentVoiceCommands.get(dedupeKey) || 0;
   if (now - lastUsedAt < voiceCommandCooldownMs) {
-    return;
+    return true;
   }
   recentVoiceCommands.set(dedupeKey, now);
 
@@ -523,25 +645,28 @@ async function maybeHandleVoiceCommand(guild, outputChannel, userId, text) {
   if (detectedCommand === "타패추천") {
     const message = await buildRandomTileRecommendation(guild);
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 타패추천${debugSuffix}\n${message}` });
-    return;
+    return true;
   }
 
   if (detectedCommand === "패뽑기") {
     const message = await buildRandomHandMessage(guild);
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 패뽑기${debugSuffix}\n${message}` });
-    return;
+    return true;
   }
 
   if (detectedCommand === "역조합") {
     const message = buildRandomYakuMessage();
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 역조합${debugSuffix}\n${message}` });
-    return;
+    return true;
   }
 
   if (detectedCommand === "안녕") {
     const message = buildGreetingMessage();
     await outputChannel.send({ content: `🎤 ${mention} 음성 명령 인식: 안녕${debugSuffix}\n${message}` });
+    return true;
   }
+
+  return false;
 }
 
 function buildWavHeader(pcmDataLength, sampleRate = 16000, channels = 1, bitsPerSample = 16) {
@@ -667,6 +792,12 @@ async function cleanupVoiceSession(guildId) {
   if (!session) return;
 
   try {
+    session.player?.stop(true);
+  } catch (error) {
+    console.error("Failed to stop voice player:", error);
+  }
+
+  try {
     session.connection.destroy();
   } catch (error) {
     console.error("Failed to destroy voice connection:", error);
@@ -693,21 +824,37 @@ async function startVoiceSession(interaction) {
     guildId: interaction.guild.id,
     adapterCreator: interaction.guild.voiceAdapterCreator,
     selfDeaf: false,
-    selfMute: true,
+    selfMute: false,
   });
 
   await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
 
+  const player = createAudioPlayer({
+    behaviors: {
+      noSubscriber: NoSubscriberBehavior.Pause,
+    },
+  });
+  connection.subscribe(player);
+
   const session = {
     connection,
+    player,
     outputChannelId: interaction.channelId,
     guildId: interaction.guild.id,
     activeUsers: new Set(),
+    conversationHistory: new Map(),
+    playbackQueue: Promise.resolve(),
+    isPlaying: false,
   };
 
   voiceSessions.set(interaction.guild.id, session);
 
+  player.on("error", (error) => {
+    console.error("Voice playback failed:", error);
+  });
+
   connection.receiver.speaking.on("start", async (userId) => {
+    if (session.isPlaying) return;
     if (session.activeUsers.has(userId)) return;
     if (userId === client.user.id) return;
     session.activeUsers.add(userId);
@@ -721,7 +868,10 @@ async function startVoiceSession(interaction) {
       const text = await transcribeUserSpeech(interaction.guild, userId, session.outputChannelId, opusStream);
 
       if (outputChannel && outputChannel.isTextBased() && text) {
-        await maybeHandleVoiceCommand(interaction.guild, outputChannel, userId, text);
+        const commandHandled = await maybeHandleVoiceCommand(interaction.guild, outputChannel, userId, text);
+        if (!commandHandled) {
+          await maybeHandleVoiceConversation(session, interaction.guild, outputChannel, userId, text);
+        }
       }
     } catch (error) {
       console.error("Voice transcription failed:", error);
@@ -739,7 +889,10 @@ async function startVoiceSession(interaction) {
     }
   });
 
-  return { ok: true, message: `음성채팅 ${voiceChannel.name}에 들어가서 듣기 시작했다냥.` };
+  const conversationStatus = voiceConversationEnabled && voiceChatApiUrl && voiceTtsApiUrl
+    ? " `쫀냥아`라고 부르면 대화도 할 수 있다냥."
+    : "";
+  return { ok: true, message: `음성채팅 ${voiceChannel.name}에 들어가서 듣기 시작했다냥.${conversationStatus}` };
 }
 
 async function sendStickerByNameToChannel(guild, channelId, stickerName) {

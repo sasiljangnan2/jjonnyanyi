@@ -2,14 +2,89 @@ import argparse
 import base64
 import json
 import os
+import subprocess
 import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from faster_whisper import WhisperModel
 
 MODEL_CACHE = {}
+
+
+def request_ollama_chat(model_name: str, system_prompt: str, messages: list) -> str:
+    ollama_api_url = os.environ.get("OLLAMA_API_URL", "http://127.0.0.1:11434/api/chat").strip()
+    cleaned_messages = []
+    if system_prompt:
+        cleaned_messages.append({"role": "system", "content": system_prompt})
+
+    for message in messages[-12:]:
+        role = str(message.get("role", "")).strip()
+        content = str(message.get("content", "")).strip()
+        if role in ("user", "assistant") and content:
+            cleaned_messages.append({"role": role, "content": content})
+
+    payload = json.dumps(
+        {
+            "model": model_name or os.environ.get("OLLAMA_MODEL", "qwen3:4b"),
+            "messages": cleaned_messages,
+            "stream": False,
+            "think": False,
+            "options": {"num_predict": 180},
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = Request(
+        ollama_api_url,
+        data=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+
+    with urlopen(request, timeout=180) as response:
+        parsed = json.loads(response.read().decode("utf-8"))
+
+    return str(parsed.get("message", {}).get("content", "")).strip()
+
+
+def synthesize_windows_speech(text: str, output_path: str):
+    if os.name != "nt":
+        raise RuntimeError("로컬 TTS는 현재 Windows 음성 합성만 지원합니다.")
+
+    script = r"""
+Add-Type -AssemblyName System.Speech
+$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$requestedVoice = $env:LOCAL_TTS_VOICE_NAME
+if ($requestedVoice) {
+  $speaker.SelectVoice($requestedVoice)
+} else {
+  $koreanVoice = $speaker.GetInstalledVoices() |
+    Where-Object { $_.VoiceInfo.Culture.Name -eq 'ko-KR' } |
+    Select-Object -First 1
+  if ($koreanVoice) {
+    $speaker.SelectVoice($koreanVoice.VoiceInfo.Name)
+  }
+}
+$speaker.Rate = [int]$env:LOCAL_TTS_RATE
+$speaker.SetOutputToWaveFile($env:LOCAL_TTS_OUTPUT_PATH)
+$speaker.Speak($env:LOCAL_TTS_TEXT)
+$speaker.Dispose()
+"""
+    child_env = os.environ.copy()
+    child_env["LOCAL_TTS_TEXT"] = text
+    child_env["LOCAL_TTS_OUTPUT_PATH"] = output_path
+    child_env["LOCAL_TTS_RATE"] = os.environ.get("LOCAL_TTS_RATE", "1")
+    child_env["LOCAL_TTS_VOICE_NAME"] = os.environ.get("LOCAL_TTS_VOICE_NAME", "")
+    subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        check=True,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
 
 
 def decode_b64_header(value: str) -> str:
@@ -142,6 +217,60 @@ class WhisperHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_bytes(self, status_code, content_type, data):
+        self.send_response(status_code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _read_json_body(self):
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length <= 0 or content_length > 64 * 1024:
+            raise ValueError("invalid body size")
+        return json.loads(self.rfile.read(content_length).decode("utf-8"))
+
+    def _handle_chat(self):
+        try:
+            payload = self._read_json_body()
+            model_name = str(payload.get("model") or os.environ.get("OLLAMA_MODEL", "qwen3:4b")).strip()
+            system_prompt = str(payload.get("system", "")).strip()
+            messages = payload.get("messages", [])
+            if not isinstance(messages, list) or not messages:
+                self._send_json(400, {"ok": False, "error": "messages are required"})
+                return
+
+            text = request_ollama_chat(model_name, system_prompt, messages)
+            if not text:
+                raise RuntimeError("Ollama returned an empty reply")
+            self._send_json(200, {"ok": True, "text": text})
+        except Exception as error:
+            self._send_json(500, {"ok": False, "error": str(error)})
+
+    def _handle_tts(self):
+        output_path = ""
+        try:
+            payload = self._read_json_body()
+            text = str(payload.get("text", "")).strip()
+            if not text:
+                self._send_json(400, {"ok": False, "error": "text is required"})
+                return
+
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                output_path = temp_file.name
+
+            synthesize_windows_speech(text[:1000], output_path)
+            audio_data = Path(output_path).read_bytes()
+            self._send_bytes(200, "audio/wav", audio_data)
+        except Exception as error:
+            self._send_json(500, {"ok": False, "error": str(error)})
+        finally:
+            if output_path:
+                try:
+                    os.unlink(output_path)
+                except OSError:
+                    pass
+
     def do_GET(self):
         if urlparse(self.path).path in ("/", "/health"):
             self._send_json(200, {"ok": True})
@@ -150,7 +279,7 @@ class WhisperHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed_url = urlparse(self.path)
-        if parsed_url.path != "/transcribe":
+        if parsed_url.path not in ("/transcribe", "/chat", "/tts"):
             self._send_json(404, {"ok": False, "error": "not found"})
             return
 
@@ -158,6 +287,14 @@ class WhisperHandler(BaseHTTPRequestHandler):
         provided_key = self.headers.get("X-Whisper-Key", "").strip()
         if expected_key and provided_key != expected_key:
             self._send_json(401, {"ok": False, "error": "unauthorized"})
+            return
+
+        if parsed_url.path == "/chat":
+            self._handle_chat()
+            return
+
+        if parsed_url.path == "/tts":
+            self._handle_tts()
             return
 
         content_length = int(self.headers.get("Content-Length", "0"))

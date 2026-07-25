@@ -24,6 +24,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+where ollama >nul 2>nul
+if errorlevel 1 (
+  echo [ERROR] Ollama not found in PATH.
+  echo Install Ollama, then run: ollama pull qwen3:4b
+  pause
+  exit /b 1
+)
+
+ollama list | findstr /I /C:"qwen3:4b" >nul
+if errorlevel 1 (
+  echo [ERROR] Ollama model qwen3:4b is not installed.
+  echo Run this first: ollama pull qwen3:4b
+  pause
+  exit /b 1
+)
+
 echo Starting Whisper server on port %PORT%...
 start "Whisper Server" cmd /k "cd /d %~dp0 && python scripts\whisper_server.py"
 
