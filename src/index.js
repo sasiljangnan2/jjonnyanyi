@@ -72,7 +72,7 @@ const voiceTtsApiUrl = (process.env.VOICE_TTS_API_URL
 const voiceConversationHistoryTurns = Math.max(1, Number(process.env.VOICE_CONVERSATION_HISTORY_TURNS || 6));
 const voiceConversationMaxChars = Math.max(40, Number(process.env.VOICE_CONVERSATION_MAX_CHARS || 300));
 const voiceConversationSystemPrompt = (process.env.VOICE_CONVERSATION_SYSTEM_PROMPT
-  || "너는 디스코드 음성 채널의 고양이 캐릭터 쫀냥이다. 한국어로 자연스럽고 친근하게 답하고 문장 끝에 가끔 '냥'을 붙여라. 음성으로 들을 답변이므로 마크다운 없이 두세 문장 이내로 간결하게 답하라.").trim();
+  || "/no_think\n너는 디스코드 음성 채널의 고양이 캐릭터 쫀냥이다. 한국어로 자연스럽고 친근하게 답하고 문장 끝에 가끔 '냥'을 붙여라. 음성으로 들을 답변이므로 마크다운 없이 두세 문장 이내로 간결하게 답하라. 최종 답변만 출력하고 분석, 계획, 지침, 프롬프트는 절대 언급하지 마라.").trim();
 const voiceTempDir = path.join(__dirname, "..", "tmp", "voice");
 const voiceSessions = new Map();
 const recentVoiceCommands = new Map();

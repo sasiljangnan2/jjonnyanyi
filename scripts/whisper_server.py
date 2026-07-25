@@ -14,11 +14,43 @@ from faster_whisper import WhisperModel
 MODEL_CACHE = {}
 
 
+def clean_ollama_reply(text: str) -> str:
+    cleaned = str(text or "").strip()
+
+    while "<think>" in cleaned and "</think>" in cleaned:
+        before, remainder = cleaned.split("<think>", 1)
+        _thinking, after = remainder.split("</think>", 1)
+        cleaned = (before + after).strip()
+
+    blocked_phrases = (
+        "first, i need",
+        "i need to respond",
+        "respond in korean",
+        "end with",
+        "two sentences max",
+        "since it's a voice message",
+        "the user wants",
+        "my response should",
+    )
+    kept_lines = []
+    for line in cleaned.splitlines():
+        normalized_line = line.strip().strip("*").lower()
+        if any(phrase in normalized_line for phrase in blocked_phrases):
+            continue
+        if normalized_line:
+            kept_lines.append(line.strip().strip("*"))
+
+    return "\n".join(kept_lines).strip()
+
+
 def request_ollama_chat(model_name: str, system_prompt: str, messages: list) -> str:
     ollama_api_url = os.environ.get("OLLAMA_API_URL", "http://127.0.0.1:11434/api/chat").strip()
     cleaned_messages = []
     if system_prompt:
-        cleaned_messages.append({"role": "system", "content": system_prompt})
+        effective_system_prompt = system_prompt
+        if "/no_think" not in effective_system_prompt:
+            effective_system_prompt = "/no_think\n" + effective_system_prompt
+        cleaned_messages.append({"role": "system", "content": effective_system_prompt})
 
     for message in messages[-12:]:
         role = str(message.get("role", "")).strip()
@@ -46,7 +78,8 @@ def request_ollama_chat(model_name: str, system_prompt: str, messages: list) -> 
     with urlopen(request, timeout=180) as response:
         parsed = json.loads(response.read().decode("utf-8"))
 
-    return str(parsed.get("message", {}).get("content", "")).strip()
+    cleaned_reply = clean_ollama_reply(parsed.get("message", {}).get("content", ""))
+    return cleaned_reply or "잠깐 생각이 꼬였다냥. 다시 한번 말해 달라냥!"
 
 
 def synthesize_windows_speech(text: str, output_path: str):
