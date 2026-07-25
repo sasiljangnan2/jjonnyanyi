@@ -1243,7 +1243,34 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (targetUser.bot) {
-      await interaction.reply({ content: "❌ 봇한테는 쓸 수 없다냥.", flags: 64 });
+      if (!interaction.guild || !loseRoleId) {
+        await interaction.reply({ content: "😾 감히 이 몸을 건드려? 괘씸하다냥! 넌 유배다냥! ...그런데 꽝 역할 설정이 안 되어 있다냥." });
+        return;
+      }
+
+      const commandUserMember = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+      const loseRole = await interaction.guild.roles.fetch(loseRoleId).catch(() => null);
+      const botMember = interaction.guild.members.me;
+
+      if (!commandUserMember || !loseRole || !botMember?.permissions.has("ManageRoles") || !loseRole.editable) {
+        await interaction.reply({ content: "😾 감히 이 몸을 건드려? 괘씸하다냥! 넌 유배다냥! ...하지만 역할을 줄 권한이 없다냥." });
+        return;
+      }
+
+      try {
+        if (!commandUserMember.roles.cache.has(loseRole.id)) {
+          await commandUserMember.roles.add(loseRole.id, "봇에게 /나가 명령어 사용");
+        }
+
+        await interaction.reply({ content: `😾 감히 이 몸을 건드려? 괘씸하다냥! ${interaction.user}, 넌 유배다냥!` });
+
+        if (Number.isFinite(loseRoleRemovalDelayMs) && loseRoleRemovalDelayMs > 0) {
+          scheduleRouletteRoleRemoval(interaction.guildId, interaction.user.id, loseRole.id, loseRoleRemovalDelayMs);
+        }
+      } catch (error) {
+        console.error("Failed to exile user who targeted a bot with /나가:", error);
+        await interaction.reply({ content: "😾 감히 이 몸을 건드려? 괘씸하다냥! 넌 유배다냥! ...역할 지급 중 문제가 생겼다냥." });
+      }
       return;
     }
 
