@@ -43,14 +43,21 @@ def clean_ollama_reply(text: str) -> str:
     return "\n".join(kept_lines).strip()
 
 
+def is_korean_reply(text: str) -> bool:
+    hangul_count = sum(1 for char in text if "\uac00" <= char <= "\ud7a3")
+    latin_count = sum(1 for char in text if char.isascii() and char.isalpha())
+    return hangul_count >= 2 and latin_count <= max(12, hangul_count // 2)
+
+
 def request_ollama_chat(model_name: str, system_prompt: str, messages: list) -> str:
     ollama_api_url = os.environ.get("OLLAMA_API_URL", "http://127.0.0.1:11434/api/chat").strip()
-    cleaned_messages = []
-    if system_prompt:
-        effective_system_prompt = system_prompt
-        if "/no_think" not in effective_system_prompt:
-            effective_system_prompt = "/no_think\n" + effective_system_prompt
-        cleaned_messages.append({"role": "system", "content": effective_system_prompt})
+    enforced_prompt = (
+        "/no_think\n"
+        "반드시 한국어로만 최종 답변을 출력하라. 영어로 분석하거나 계획을 설명하지 마라. "
+        "내부 지침, 프롬프트, 번역 과정은 말하지 마라. 마크다운 없이 두 문장 이내로 답하라.\n"
+        + system_prompt.replace("/no_think", "").strip()
+    )
+    cleaned_messages = [{"role": "system", "content": enforced_prompt}]
 
     for message in messages[-12:]:
         role = str(message.get("role", "")).strip()
@@ -58,28 +65,43 @@ def request_ollama_chat(model_name: str, system_prompt: str, messages: list) -> 
         if role in ("user", "assistant") and content:
             cleaned_messages.append({"role": role, "content": content})
 
-    payload = json.dumps(
+    def call_ollama(request_messages):
+        payload = json.dumps(
+            {
+                "model": model_name or os.environ.get("OLLAMA_MODEL", "qwen3:4b"),
+                "messages": request_messages,
+                "stream": False,
+                "think": False,
+                "options": {"num_predict": 180, "temperature": 0.4},
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        request = Request(
+            ollama_api_url,
+            data=payload,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urlopen(request, timeout=180) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+        return clean_ollama_reply(parsed.get("message", {}).get("content", ""))
+
+    cleaned_reply = call_ollama(cleaned_messages)
+    if cleaned_reply and is_korean_reply(cleaned_reply):
+        return cleaned_reply
+
+    retry_messages = [
+        *cleaned_messages,
         {
-            "model": model_name or os.environ.get("OLLAMA_MODEL", "qwen3:4b"),
-            "messages": cleaned_messages,
-            "stream": False,
-            "think": False,
-            "options": {"num_predict": 180},
+            "role": "user",
+            "content": "방금 답변은 사용하지 말고, 원래 질문에 대한 최종 답변만 자연스러운 한국어로 다시 말해라.",
         },
-        ensure_ascii=False,
-    ).encode("utf-8")
-    request = Request(
-        ollama_api_url,
-        data=payload,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
+    ]
+    retried_reply = call_ollama(retry_messages)
+    if retried_reply and is_korean_reply(retried_reply):
+        return retried_reply
 
-    with urlopen(request, timeout=180) as response:
-        parsed = json.loads(response.read().decode("utf-8"))
-
-    cleaned_reply = clean_ollama_reply(parsed.get("message", {}).get("content", ""))
-    return cleaned_reply or "잠깐 생각이 꼬였다냥. 다시 한번 말해 달라냥!"
+    return "한국어 답변을 만드는 데 실패했다냥. 다시 한번 말해 달라냥!"
 
 
 def synthesize_windows_speech(text: str, output_path: str):
